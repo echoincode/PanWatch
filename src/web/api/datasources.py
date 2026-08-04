@@ -21,12 +21,19 @@ TYPE_LABELS = {
     "quote": "实时行情",
     "events": "事件日历",
     "chart": "K线截图",
+    "flash_news": "快讯",
+    "fundamentals": "基本面",
+    "dragon_tiger": "龙虎榜",
+    "margin": "融资融券",
+    "shareholders": "股东户数",
+    "dividend": "分红",
+    "northbound": "北向资金",
 }
 
 
 class DataSourceCreate(BaseModel):
     name: str
-    type: str  # news / kline / capital_flow / quote / events / chart
+    type: str  # news / kline / capital_flow / quote / events / chart / flash_news
     provider: str
     config: dict = {}
     enabled: bool = True
@@ -62,8 +69,38 @@ class DataSourceResponse(BaseModel):
         from_attributes = True
 
 
-def _to_response(source: DataSource) -> dict:
-    """转换为响应格式"""
+# 已接入 marketdata 新引擎的数据类型(随各类型逐步迁移扩充)
+_ENGINE_ATTACHED_TYPES = {
+    "news",
+    "quote",
+    "kline",
+    "capital_flow",
+    "events",
+    "flash_news",
+    "fundamentals",
+    "dragon_tiger",
+    "margin",
+    "shareholders",
+    "dividend",
+    "northbound",
+}
+
+
+def _is_orphan(type_: str, provider: str) -> bool:
+    """判定 (type, provider) 是否为孤儿数据源:不在包内引擎 vendor 集合、也不在当前 seed 列表里。
+
+    与 server.reconcile_data_sources 的孤儿判定保持一致(legal = 包内集合 | seed 集合)。
+    """
+    from marketdata import PACKAGE_VENDORS_BY_TYPE
+    from server import _seed_providers_by_type
+
+    legal = PACKAGE_VENDORS_BY_TYPE.get(type_, frozenset()) | _seed_providers_by_type().get(type_, set())
+    return provider not in legal
+
+
+def _to_response(source: DataSource, health_map: dict | None = None) -> dict:
+    """转换为响应格式。health_map: {provider: 指标快照};缺失则 health=None。"""
+    health = (health_map or {}).get(source.provider)
     return {
         "id": source.id,
         "name": source.name,
@@ -75,6 +112,9 @@ def _to_response(source: DataSource) -> dict:
         "priority": source.priority,
         "supports_batch": source.supports_batch or False,
         "test_symbols": source.test_symbols or [],
+        "engine_attached": source.type in _ENGINE_ATTACHED_TYPES,
+        "health": health,
+        "is_orphan": _is_orphan(source.type, source.provider),
     }
 
 
@@ -85,13 +125,25 @@ def list_datasources(type: str | None = None, db: Session = Depends(get_db)):
     if type:
         query = query.filter(DataSource.type == type)
     sources = query.order_by(DataSource.type, DataSource.priority, DataSource.id).all()
-    return [_to_response(s) for s in sources]
+    from src.core.marketdata_client import get_market_data
+    health_map = get_market_data().health()
+    return [_to_response(s, health_map) for s in sources]
 
 
 @router.get("/types")
 def get_datasource_types():
     """获取数据源类型列表"""
     return [{"type": k, "label": v} for k, v in TYPE_LABELS.items()]
+
+
+@router.post("/reset-to-seed")
+def reset_datasources_to_seed(db: Session = Depends(get_db)):
+    """数据源表温和对账:补齐缺失的预置默认 + 删除孤儿行,保留用户有效自定义/凭证。"""
+    from server import reconcile_data_sources
+
+    summary = reconcile_data_sources(db)
+    logger.info(f"数据源手动对账完成: {summary}")
+    return summary
 
 
 @router.get("/{source_id}")

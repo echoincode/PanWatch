@@ -1,16 +1,24 @@
 """统一数据源管理器"""
 
+import asyncio
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable
 
+from marketdata import PACKAGE_VENDORS_BY_TYPE, capture_errors
+
 from src.web.database import SessionLocal
 from src.web.models import DataSource
 from src.models.market import MarketCode
 
 logger = logging.getLogger(__name__)
+
+# 数据源"测试"最多测多少个配置的 test_symbols(上限,防用户贴一大串把源打爆)。
+# 取 10 覆盖常见配置(此前 kline/capital_flow 写死 [:3]、quote/events [:5],会把用户
+# 配的第 4/6 个悄悄切掉,造成"配了 N 个只返回前几个"的意外)。
+_TEST_SYMBOL_LIMIT = 10
 
 
 @dataclass
@@ -58,32 +66,16 @@ class DataCollectorManager:
 
     def _register_collectors(self):
         """注册所有采集器"""
-        from src.collectors.news_collector import (
-            XueqiuNewsCollector,
-            EastMoneyStockNewsCollector,
-            EastMoneyNewsCollector,
-        )
         from src.collectors.kline_collector import KlineCollector
         from src.collectors.capital_flow_collector import CapitalFlowCollector
-        from src.collectors.akshare_collector import AkshareCollector
         from src.collectors.events_collector import EastMoneyEventsCollector
 
         self.COLLECTOR_FACTORIES = {
-            "news": {
-                "xueqiu": lambda cfg: XueqiuNewsCollector(
-                    cookies=cfg.get("cookies", "")
-                ),
-                "eastmoney_news": lambda cfg: EastMoneyStockNewsCollector(),
-                "eastmoney": lambda cfg: EastMoneyNewsCollector(),
-            },
             "kline": {
                 "tencent": lambda cfg: ("tencent", KlineCollector),
             },
             "capital_flow": {
                 "eastmoney": lambda cfg: CapitalFlowCollector(MarketCode.CN),
-            },
-            "quote": {
-                "tencent": lambda cfg: AkshareCollector(MarketCode.CN),
             },
             "chart": {
                 "xueqiu": lambda cfg: ("xueqiu", cfg),
@@ -323,14 +315,13 @@ class DataCollectorManager:
 
     async def collect_quote(self, symbols: list[str]) -> CollectorResult:
         """采集实时行情"""
-        from src.collectors.akshare_collector import AkshareCollector
+        from src.core.marketdata_client import md_stock_data
 
         start_time = datetime.now()
         self._log("实时行情", "quote", "start", f"获取 {len(symbols)} 只股票的行情")
 
         try:
-            collector = AkshareCollector(MarketCode.CN)
-            stocks = await collector.get_stock_data(symbols)
+            stocks = await asyncio.to_thread(md_stock_data, symbols, MarketCode.CN.value)
 
             duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
             self._log(
@@ -369,7 +360,20 @@ class DataCollectorManager:
         )
 
         try:
-            result = await self._test_source_impl(source, test_symbols)
+            # 收集 vendor/market_get 的真实失败原因,失败时透到 UI(而不是笼统的"无数据")
+            with capture_errors() as errs:
+                result = await self._test_source_impl(source, test_symbols)
+            if not result.success and errs:
+                # 去重保序 + 截断,拼成真因;若原本已有更具体的 error(如"provider 无对应 vendor")保留在前
+                seen: dict[str, None] = {}
+                for m in errs:
+                    seen.setdefault(m, None)
+                detail = "; ".join(list(seen)[:8])
+                generic = {"", "无数据", "获取行情失败", "获取 K 线数据失败", "获取资金流向失败",
+                           "未获取到新闻数据", "未获取到快讯数据", "未获取到基本面数据",
+                           "未获取到龙虎榜数据", "未获取到融资融券数据", "未获取到股东数据",
+                           "未获取到分红数据", "未获取到北向资金数据"}
+                result.error = detail if (result.error or "") in generic else f"{result.error};真因: {detail}"
             duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
 
             if result.success:
@@ -412,51 +416,8 @@ class DataCollectorManager:
         self, source: DataSource, test_symbols: list[str]
     ) -> CollectorResult:
         """测试数据源的具体实现"""
-        from datetime import timedelta
-
         if source.type == "news":
-            from src.collectors.news_collector import (
-                XueqiuNewsCollector,
-                EastMoneyStockNewsCollector,
-                EastMoneyNewsCollector,
-            )
-
-            since = datetime.now() - timedelta(hours=24)
-            collector = None
-
-            # 获取测试股票的名称映射（用于搜索 API）
-            symbol_names = self._get_stock_names(test_symbols)
-
-            if source.provider == "xueqiu":
-                cookies = (source.config or {}).get("cookies", "")
-                collector = XueqiuNewsCollector(cookies=cookies)
-            elif source.provider == "eastmoney_news":
-                collector = EastMoneyStockNewsCollector(symbol_names=symbol_names)
-            elif source.provider == "eastmoney":
-                collector = EastMoneyNewsCollector()
-
-            if collector:
-                news = await collector.fetch_news(symbols=test_symbols, since=since)
-                error_msg = ""
-                if len(news) == 0:
-                    if source.provider == "xueqiu":
-                        error_msg = "无数据，请检查 cookie 是否有效"
-                    elif source.provider == "eastmoney_news" and not symbol_names:
-                        error_msg = "未找到测试股票的名称，请先添加自选股"
-                    else:
-                        error_msg = "未获取到新闻数据"
-                return CollectorResult(
-                    success=len(news) > 0,
-                    data=[
-                        {
-                            "title": n.title[:60],
-                            "time": n.publish_time.strftime("%m-%d %H:%M"),
-                        }
-                        for n in news[:10]
-                    ],
-                    count=len(news),
-                    error=error_msg,
-                )
+            return await self._test_news_source(source, test_symbols)
 
         elif source.type == "kline":
             # 按 provider 路由到对应 Provider,而不是写死走 tencent (KlineCollector)。
@@ -468,7 +429,7 @@ class DataCollectorManager:
 
             collector = CapitalFlowCollector(MarketCode.CN)
             results = []
-            for symbol in test_symbols[:3]:
+            for symbol in test_symbols[:_TEST_SYMBOL_LIMIT]:
                 data = collector.get_capital_flow(symbol)
                 if data:
                     results.append(
@@ -536,7 +497,7 @@ class DataCollectorManager:
                     backoff_s=cfg.get("backoff_s", 0.6),
                 )
                 items = await collector.fetch_events(
-                    symbols=test_symbols[:5],
+                    symbols=test_symbols[:_TEST_SYMBOL_LIMIT],
                     since=since,
                     page_size=100,
                 )
@@ -563,73 +524,85 @@ class DataCollectorManager:
                     else f"未获取到事件数据（lookback={lookback_days}d）",
                 )
 
+        elif source.type == "flash_news":
+            return await self._test_flash_news_source(source)
+
+        elif source.type == "fundamentals":
+            return await self._test_fundamentals_source(source)
+
+        elif source.type == "dragon_tiger":
+            return await self._test_dragon_tiger_source(source)
+
+        elif source.type == "margin":
+            return await self._test_margin_source(source)
+
+        elif source.type == "shareholders":
+            return await self._test_shareholders_source(source)
+
+        elif source.type == "dividend":
+            return await self._test_dividend_source(source)
+
+        elif source.type == "northbound":
+            return await self._test_northbound_source(source)
+
         return CollectorResult(
             success=False, error=f"不支持的数据源类型: {source.type}"
         )
 
+    # 包内 kline/quote/flash_news/fundamentals Engine 各自只注册了这些 vendor(权威来源见 marketdata.PACKAGE_VENDORS_BY_TYPE)。
+    # provider 不在这个集合里 = 包内没实现该源,测试应给出明确 error,不能构造 Engine 硬跑。
+    _NEWS_PACKAGE_VENDORS = PACKAGE_VENDORS_BY_TYPE["news"]
+    _KLINE_PACKAGE_VENDORS = PACKAGE_VENDORS_BY_TYPE["kline"]
+    _QUOTE_PACKAGE_VENDORS = PACKAGE_VENDORS_BY_TYPE["quote"]
+    _FLASH_NEWS_PACKAGE_VENDORS = PACKAGE_VENDORS_BY_TYPE["flash_news"]
+    _FUNDAMENTALS_PACKAGE_VENDORS = PACKAGE_VENDORS_BY_TYPE["fundamentals"]
+    _DRAGON_TIGER_PACKAGE_VENDORS = PACKAGE_VENDORS_BY_TYPE["dragon_tiger"]
+    _MARGIN_PACKAGE_VENDORS = PACKAGE_VENDORS_BY_TYPE["margin"]
+    _SHAREHOLDERS_PACKAGE_VENDORS = PACKAGE_VENDORS_BY_TYPE["shareholders"]
+    _DIVIDEND_PACKAGE_VENDORS = PACKAGE_VENDORS_BY_TYPE["dividend"]
+    _NORTHBOUND_PACKAGE_VENDORS = PACKAGE_VENDORS_BY_TYPE["northbound"]
+
     async def _test_kline_source(
         self, source: DataSource, test_symbols: list[str]
     ) -> CollectorResult:
-        """按 provider 测试 K 线源:tencent/tushare/yfinance 各走自己实现,不串备份链。
+        """按 provider 测试 K 线源:走 marketdata 包的单源 Engine(仅该 vendor,不串备份链)。
 
         测试需要的是"这个 provider 自己工作正常",不是"整条主备链有 fallback 能跑通",
-        所以不走 Orchestrator(它会自动切到下一条)。
+        所以用只含这一个 vendor 的 StaticConfigProvider 隔离测试指定源。
         """
-        from src.core.providers.base import ProviderRequest
-        from src.core.providers.kline.tencent import TencentKlineProvider
-        from src.core.providers.kline.tushare import TushareKlineProvider
-        from src.core.providers.kline.yfinance import YFinanceKlineProvider
+        from marketdata import MarketData, SourceConfig, StaticConfigProvider, Symbol
+
+        if source.provider not in self._KLINE_PACKAGE_VENDORS:
+            return CollectorResult(
+                success=False,
+                error=f"provider {source.provider} 无对应 vendor，包内未实现该 K 线源",
+            )
 
         cfg = source.config or {}
-        if source.provider == "tencent":
-            provider = TencentKlineProvider(config=cfg)
-            market = "CN"
-        elif source.provider == "tushare":
-            provider = TushareKlineProvider(config=cfg)
-            market = "CN"
-            if provider._init_error:
-                return CollectorResult(
-                    success=False, error=provider._init_error
-                )
-        elif source.provider == "yfinance":
-            provider = YFinanceKlineProvider(config=cfg)
-            market = "US"  # yfinance 默认用 US 测,A 股不支持
-            if provider._init_error:
-                return CollectorResult(
-                    success=False, error=provider._init_error
-                )
-        else:
-            return CollectorResult(
-                success=False, error=f"未知的 kline provider: {source.provider}"
+        md = MarketData(
+            config=StaticConfigProvider(
+                {"kline": [SourceConfig(vendor=source.provider, config=cfg, enabled=True)]}
             )
+        )
 
         results = []
         first_error = ""
-        for symbol in test_symbols[:3]:
+        for symbol in test_symbols[:_TEST_SYMBOL_LIMIT]:
+            market = Symbol.parse(symbol).market.value
             try:
-                resp = await provider.fetch(
-                    ProviderRequest(
-                        symbols=(symbol,), market=market, extra=(("days", 30),)
-                    )
-                )
-                if resp.success and resp.data:
-                    last = resp.data[-1]
-                    last_close = getattr(last, "close", None) or (
-                        last.get("close") if isinstance(last, dict) else None
-                    )
-                    last_date = getattr(last, "date", None) or (
-                        last.get("date") if isinstance(last, dict) else None
-                    )
+                bars = md.klines(symbol, market=market, days=30)
+                if bars:
+                    last = bars[-1]
                     results.append(
                         {
                             "symbol": symbol,
-                            "last_close": last_close,
-                            "last_date": last_date,
-                            "count": len(resp.data),
+                            "last_close": last.close,
+                            "last_date": last.date,
+                            "count": len(bars),
                         }
                     )
                 elif not first_error:
-                    first_error = resp.error or "无数据"
+                    first_error = "无数据"
             except Exception as e:
                 if not first_error:
                     first_error = str(e)
@@ -644,50 +617,403 @@ class DataCollectorManager:
     async def _test_quote_source(
         self, source: DataSource, test_symbols: list[str]
     ) -> CollectorResult:
-        """按 provider 测试行情源。"""
-        from src.core.providers.base import ProviderRequest
-        from src.core.providers.quote.tencent import TencentQuoteProvider
-        from src.core.providers.quote.yfinance import YFinanceQuoteProvider
+        """按 provider 测试行情源:走 marketdata 包的单源 Engine(仅该 vendor,不串备份链)。"""
+        from marketdata import MarketData, SourceConfig, StaticConfigProvider
+
+        from src.core.marketdata_client import _quote_to_row
+
+        if source.provider not in self._QUOTE_PACKAGE_VENDORS:
+            return CollectorResult(
+                success=False,
+                error=f"provider {source.provider} 无对应 vendor，包内未实现该行情源",
+            )
 
         cfg = source.config or {}
-        if source.provider == "tencent":
-            provider = TencentQuoteProvider(config=cfg)
-            market = "CN"
-        elif source.provider == "yfinance":
-            provider = YFinanceQuoteProvider(config=cfg)
-            market = "US"
-            if provider._init_error:
-                return CollectorResult(
-                    success=False, error=provider._init_error
-                )
-        else:
-            return CollectorResult(
-                success=False, error=f"未知的 quote provider: {source.provider}"
+        md = MarketData(
+            config=StaticConfigProvider(
+                {"quote": [SourceConfig(vendor=source.provider, config=cfg, enabled=True)]}
             )
+        )
 
         try:
-            resp = await provider.fetch(
-                ProviderRequest(symbols=tuple(test_symbols[:5]), market=market)
-            )
+            quotes = md.quotes(list(test_symbols[:_TEST_SYMBOL_LIMIT]))
         except Exception as e:
             return CollectorResult(success=False, error=str(e))
 
-        if not resp.success:
-            return CollectorResult(success=False, error=resp.error or "获取行情失败")
-
+        rows = [_quote_to_row(q) for q in quotes]
         return CollectorResult(
-            success=len(resp.data) > 0,
+            success=len(rows) > 0,
             data=[
                 {
-                    "symbol": item.get("symbol"),
-                    "name": item.get("name"),
-                    "price": item.get("current_price"),
-                    "change_pct": item.get("change_pct"),
+                    "symbol": row["symbol"],
+                    "name": row["name"],
+                    "price": row["current_price"],
+                    "change_pct": row["change_pct"],
                 }
-                for item in (resp.data or [])
+                for row in rows
             ],
-            count=len(resp.data or []),
-            error="" if resp.data else "获取行情失败",
+            count=len(rows),
+            error="" if rows else "获取行情失败",
+        )
+
+    async def _test_news_source(
+        self, source: DataSource, test_symbols: list[str]
+    ) -> CollectorResult:
+        """按 provider 测试新闻源:走 marketdata 包的单源 Engine(仅该 vendor,不聚合其它源)。
+
+        新闻是按 symbol 的数据;eastmoney_news 用股票名称搜索(效果远好于代码搜索),
+        所以这里取测试股票的名称映射一并传入。capture_errors 已在 test_source 外层
+        包着,失败时会自动透真因（含雪球 WAF 拦截）。
+        """
+        from marketdata import MarketData, SourceConfig, StaticConfigProvider
+
+        if source.provider not in self._NEWS_PACKAGE_VENDORS:
+            return CollectorResult(
+                success=False,
+                error=f"provider {source.provider} 无对应 vendor，包内未实现该新闻源",
+            )
+
+        cfg = source.config or {}
+        md = MarketData(
+            config=StaticConfigProvider(
+                {"news": [SourceConfig(vendor=source.provider, config=cfg, enabled=True)]}
+            )
+        )
+
+        names = self._get_stock_names(test_symbols)
+
+        try:
+            # 包内 news publish_time 是 aware(UTC),now 也须 aware,否则 since 过滤崩
+            from datetime import timezone
+            news = md.news(test_symbols, names=names, now=datetime.now(timezone.utc))
+        except Exception as e:
+            return CollectorResult(success=False, error=str(e))
+
+        return CollectorResult(
+            success=len(news) > 0,
+            data=[
+                {
+                    "title": n.title[:60],
+                    "time": n.publish_time.strftime("%m-%d %H:%M"),
+                }
+                for n in news[:10]
+            ],
+            count=len(news),
+            error="" if news else "未获取到新闻数据",
+        )
+
+    async def _test_flash_news_source(self, source: DataSource) -> CollectorResult:
+        """按 provider 测试快讯源:走 marketdata 包的单源 Engine(仅该 vendor,不串备份链)。
+
+        快讯是市场级数据(7×24 电报),不按 symbols 过滤,所以不传 test_symbols。
+        """
+        from marketdata import MarketData, SourceConfig, StaticConfigProvider
+
+        if source.provider not in self._FLASH_NEWS_PACKAGE_VENDORS:
+            return CollectorResult(
+                success=False,
+                error=f"provider {source.provider} 无对应 vendor，包内未实现该快讯源",
+            )
+
+        cfg = source.config or {}
+        md = MarketData(
+            config=StaticConfigProvider(
+                {"flash_news": [SourceConfig(vendor=source.provider, config=cfg, enabled=True)]}
+            )
+        )
+
+        try:
+            items = md.flash_news(limit=20)
+        except Exception as e:
+            return CollectorResult(success=False, error=str(e))
+
+        return CollectorResult(
+            success=len(items) > 0,
+            data=[
+                {
+                    "title": i.title[:80],
+                    "time": i.publish_time.strftime("%m-%d %H:%M"),
+                    "symbols": i.symbols,
+                }
+                for i in items[:10]
+            ],
+            count=len(items),
+            error="" if items else "未获取到快讯数据",
+        )
+
+    async def _test_fundamentals_source(self, source: DataSource) -> CollectorResult:
+        """按 provider 测试基本面源:走 marketdata 包的单源 Engine(仅该 vendor,不串备份链)。
+
+        基本面是按 symbol 的数据(与市场级 flash_news 不同),测试必须显式配置
+        test_symbols,不套用全局默认股票,配置缺失时直接给出明确 error。
+        """
+        from marketdata import MarketData, SourceConfig, StaticConfigProvider
+
+        if source.provider not in self._FUNDAMENTALS_PACKAGE_VENDORS:
+            return CollectorResult(
+                success=False,
+                error=f"provider {source.provider} 无对应 vendor，包内未实现该基本面源",
+            )
+
+        syms = list(source.test_symbols or [])[:5]
+        if not syms:
+            return CollectorResult(success=False, error="请配置测试股票代码")
+
+        cfg = source.config or {}
+        md = MarketData(
+            config=StaticConfigProvider(
+                {
+                    "fundamentals": [
+                        SourceConfig(vendor=source.provider, config=cfg, enabled=True)
+                    ]
+                }
+            )
+        )
+
+        try:
+            items = md.fundamentals(syms)
+        except Exception as e:
+            return CollectorResult(success=False, error=str(e))
+
+        return CollectorResult(
+            success=len(items) > 0,
+            data=[
+                {
+                    "symbol": i.symbol,
+                    "name": i.name,
+                    "pe_ttm": i.pe_ttm,
+                    "pb": i.pb,
+                    "roe": i.roe,
+                }
+                for i in items[:10]
+            ],
+            count=len(items),
+            error="" if items else "未获取到基本面数据",
+        )
+
+    async def _test_dragon_tiger_source(self, source: DataSource) -> CollectorResult:
+        """测试龙虎榜源:走 marketdata 包的单源 Engine(仅该 vendor,不串备份链)。
+
+        龙虎榜是市场级数据(不按 symbols 过滤),但需要指定交易日。测试时优先取
+        source.config.test_date,未配置则用当前日期占位(仅用于验证连通性，
+        实抓以真实交易日为准）。
+        """
+        from marketdata import MarketData, SourceConfig, StaticConfigProvider
+
+        if source.provider not in self._DRAGON_TIGER_PACKAGE_VENDORS:
+            return CollectorResult(
+                success=False,
+                error=f"provider {source.provider} 无对应 vendor，包内未实现该龙虎榜源",
+            )
+
+        cfg = source.config or {}
+        md = MarketData(
+            config=StaticConfigProvider(
+                {
+                    "dragon_tiger": [
+                        SourceConfig(vendor=source.provider, config=cfg, enabled=True)
+                    ]
+                }
+            )
+        )
+
+        test_date = cfg.get("test_date") or datetime.now().strftime("%Y-%m-%d")
+
+        try:
+            items = md.dragon_tiger(date=test_date)
+        except Exception as e:
+            return CollectorResult(success=False, error=str(e))
+
+        return CollectorResult(
+            success=len(items) > 0,
+            data=[
+                {
+                    "symbol": i.symbol,
+                    "name": i.name,
+                    "net_buy": i.net_buy,
+                }
+                for i in items[:10]
+            ],
+            count=len(items),
+            error=""
+            if items
+            else "未获取到龙虎榜数据（需配置 test_date 或当日有榜）",
+        )
+
+    async def _test_margin_source(self, source: DataSource) -> CollectorResult:
+        """测试融资融券源:走 marketdata 包的单源 Engine(仅该 vendor,不串备份链)。
+
+        融资融券是按 symbol 的数据,测试必须显式配置 test_symbols。
+        """
+        from marketdata import MarketData, SourceConfig, StaticConfigProvider
+
+        if source.provider not in self._MARGIN_PACKAGE_VENDORS:
+            return CollectorResult(
+                success=False,
+                error=f"provider {source.provider} 无对应 vendor，包内未实现该融资融券源",
+            )
+
+        syms = list(source.test_symbols or [])[:5]
+        if not syms:
+            return CollectorResult(success=False, error="请配置测试股票代码")
+
+        cfg = source.config or {}
+        md = MarketData(
+            config=StaticConfigProvider(
+                {"margin": [SourceConfig(vendor=source.provider, config=cfg, enabled=True)]}
+            )
+        )
+
+        try:
+            items = md.margin(syms)
+        except Exception as e:
+            return CollectorResult(success=False, error=str(e))
+
+        return CollectorResult(
+            success=len(items) > 0,
+            data=[
+                {
+                    "symbol": i.symbol,
+                    "date": i.date,
+                    "total_balance": i.total_balance,
+                }
+                for i in items[:10]
+            ],
+            count=len(items),
+            error="" if items else "未获取到融资融券数据",
+        )
+
+    async def _test_shareholders_source(self, source: DataSource) -> CollectorResult:
+        """测试股东户数源:走 marketdata 包的单源 Engine(仅该 vendor,不串备份链)。
+
+        股东户数是按 symbol 的数据,测试必须显式配置 test_symbols。
+        """
+        from marketdata import MarketData, SourceConfig, StaticConfigProvider
+
+        if source.provider not in self._SHAREHOLDERS_PACKAGE_VENDORS:
+            return CollectorResult(
+                success=False,
+                error=f"provider {source.provider} 无对应 vendor，包内未实现该股东户数源",
+            )
+
+        syms = list(source.test_symbols or [])[:5]
+        if not syms:
+            return CollectorResult(success=False, error="请配置测试股票代码")
+
+        cfg = source.config or {}
+        md = MarketData(
+            config=StaticConfigProvider(
+                {
+                    "shareholders": [
+                        SourceConfig(vendor=source.provider, config=cfg, enabled=True)
+                    ]
+                }
+            )
+        )
+
+        try:
+            items = md.shareholders(syms)
+        except Exception as e:
+            return CollectorResult(success=False, error=str(e))
+
+        return CollectorResult(
+            success=len(items) > 0,
+            data=[
+                {
+                    "symbol": i.symbol,
+                    "report_date": i.report_date,
+                    "holder_num": i.holder_num,
+                }
+                for i in items[:10]
+            ],
+            count=len(items),
+            error="" if items else "未获取到股东户数数据",
+        )
+
+    async def _test_dividend_source(self, source: DataSource) -> CollectorResult:
+        """测试分红源:走 marketdata 包的单源 Engine(仅该 vendor,不串备份链)。
+
+        分红是按 symbol 的数据,测试必须显式配置 test_symbols。
+        """
+        from marketdata import MarketData, SourceConfig, StaticConfigProvider
+
+        if source.provider not in self._DIVIDEND_PACKAGE_VENDORS:
+            return CollectorResult(
+                success=False,
+                error=f"provider {source.provider} 无对应 vendor，包内未实现该分红源",
+            )
+
+        syms = list(source.test_symbols or [])[:5]
+        if not syms:
+            return CollectorResult(success=False, error="请配置测试股票代码")
+
+        cfg = source.config or {}
+        md = MarketData(
+            config=StaticConfigProvider(
+                {"dividend": [SourceConfig(vendor=source.provider, config=cfg, enabled=True)]}
+            )
+        )
+
+        try:
+            items = md.dividend(syms)
+        except Exception as e:
+            return CollectorResult(success=False, error=str(e))
+
+        return CollectorResult(
+            success=len(items) > 0,
+            data=[
+                {
+                    "symbol": i.symbol,
+                    "ex_date": i.ex_date,
+                    "dividend_per_share": i.dividend_per_share,
+                }
+                for i in items[:10]
+            ],
+            count=len(items),
+            error="" if items else "未获取到分红数据",
+        )
+
+    async def _test_northbound_source(self, source: DataSource) -> CollectorResult:
+        """测试北向资金源:走 marketdata 包的单源 Engine(仅该 vendor,不串备份链)。
+
+        北向资金是市场级数据(7×24 资金流),不按 symbols 过滤,所以不传 test_symbols。
+        """
+        from marketdata import MarketData, SourceConfig, StaticConfigProvider
+
+        if source.provider not in self._NORTHBOUND_PACKAGE_VENDORS:
+            return CollectorResult(
+                success=False,
+                error=f"provider {source.provider} 无对应 vendor，包内未实现该北向资金源",
+            )
+
+        cfg = source.config or {}
+        md = MarketData(
+            config=StaticConfigProvider(
+                {
+                    "northbound": [
+                        SourceConfig(vendor=source.provider, config=cfg, enabled=True)
+                    ]
+                }
+            )
+        )
+
+        try:
+            items = md.northbound()
+        except Exception as e:
+            return CollectorResult(success=False, error=str(e))
+
+        return CollectorResult(
+            success=len(items) > 0,
+            data=[
+                {
+                    "date": i.date,
+                    "hgt_net": i.hgt_net,
+                    "total_net": i.total_net,
+                }
+                for i in items[:10]
+            ],
+            count=len(items),
+            error="" if items else "未获取到北向资金数据",
         )
 
 

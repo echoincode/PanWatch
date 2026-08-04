@@ -10,7 +10,7 @@ from typing import Any
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from src.core.providers import ProviderRequest, get_quote_orchestrator
+from src.core.marketdata_client import md_quote_rows
 from src.models.market import MarketCode, MARKETS
 from src.web.database import SessionLocal
 from src.web.models import (
@@ -19,10 +19,60 @@ from src.web.models import (
     PaperTradingTrade,
     StrategySignalRun,
 )
+from src.core.backtest.cost_model import CostModel
 
 logger = logging.getLogger(__name__)
 
+# 模拟盘交易成本(A股口径,Phase 1)。与回测共用同一成本模型。
+COST_MODEL = CostModel()
+
+# 建仓股数下限(A股一手)
 FIXED_QUANTITY = 100
+
+# 移动止损:浮盈超过 MIN_PROFIT_FOR_TRAILING 后启用,从持仓最高价回撤超 TRAILING_STOP_PCT 即离场
+MIN_PROFIT_FOR_TRAILING = 0.05
+TRAILING_STOP_PCT = 0.10
+# 时间止损:无 signal.holding_days 时的默认最大持有自然日
+DEFAULT_TIME_STOP_DAYS = 20
+
+
+def _position_weight(rank_score: float) -> float:
+    """按信号强度分配单笔资金占该市场预算的比例(rank_score 越高投越多)。"""
+    s = float(rank_score or 0.0)
+    if s >= 85:
+        return 0.25
+    if s >= 75:
+        return 0.18
+    if s >= 65:
+        return 0.12
+    return 0.08
+
+
+def _compute_quantity(
+    *,
+    rank_score: float,
+    market_budget: float,
+    price: float,
+    available_cash: float,
+    cost_model: CostModel,
+    lot: int = FIXED_QUANTITY,
+) -> int:
+    """按信号强度 + 市场预算计算建仓股数(lot 整数倍),受可用现金(含买入费)约束。
+
+    返回 0 表示连最小一手都买不起,应跳过。
+    """
+    if price <= 0:
+        return 0
+    target_cash = max(0.0, market_budget) * _position_weight(rank_score)
+    qty = int((target_cash / price) // lot) * lot
+    if qty < lot:
+        qty = lot  # 至少一手
+    while qty >= lot:
+        outlay = -cost_model.fill("buy", price, qty).cash_delta
+        if outlay <= available_cash:
+            return qty
+        qty -= lot
+    return 0
 
 
 def _utc_now() -> datetime:
@@ -210,17 +260,12 @@ class PaperTradingEngine:
             mc = _to_market(market)
             grouped.setdefault(mc, []).append(symbol)
 
-        orch = get_quote_orchestrator()
         out: dict[tuple[str, str], dict] = {}
         for market, symbols in grouped.items():
             if not symbols:
                 continue
-            req = ProviderRequest(symbols=tuple(symbols), market=market.value)
-            resp = orch.fetch_sync(req)
-            if not resp.success:
-                logger.error(f"[模拟盘] 拉行情失败 {market.value}: {resp.error}")
-                continue
-            by_symbol = {str(r.get("symbol")): r for r in (resp.data or [])}
+            rows = md_quote_rows(symbols, market.value)
+            by_symbol = {str(r.get("symbol")): r for r in rows}
             for sym in symbols:
                 q = by_symbol.get(sym)
                 if q:
@@ -296,12 +341,26 @@ class PaperTradingEngine:
 
             # 用当前市价入场
             entry_price = current_price
-            cost = entry_price * FIXED_QUANTITY
             mkt = sig.stock_market
             if alloc.get(mkt, 0.0) <= 0:
                 continue  # 该市场比例为 0，不投入
-            if cost > market_cash.get(mkt, 0.0):
-                continue  # 该市场子池额度不足
+            avail = market_cash.get(mkt, 0.0)
+
+            # 仓位管理:按信号强度分配该市场预算(替换原固定 100 股)
+            market_budget = account.initial_capital * alloc.get(mkt, 0.0)
+            quantity = _compute_quantity(
+                rank_score=float(sig.rank_score or 0.0),
+                market_budget=market_budget,
+                price=entry_price,
+                available_cash=avail,
+                cost_model=COST_MODEL,
+            )
+            if quantity <= 0:
+                continue  # 子池额度不足以买入最小一手
+
+            # 含交易成本的实际买入流出
+            buy_fill = COST_MODEL.fill("buy", entry_price, quantity)
+            buy_outlay = -buy_fill.cash_delta
 
             # 基于入场价计算止损/止盈
             # 优先用信号的止损/止盈比例，否则用默认 -8%/+15%
@@ -326,11 +385,12 @@ class PaperTradingEngine:
                 stock_symbol=sig.stock_symbol,
                 stock_market=sig.stock_market,
                 stock_name=sig.stock_name or "",
-                quantity=FIXED_QUANTITY,
+                quantity=quantity,
                 entry_price=entry_price,
                 stop_loss=stop_loss,
                 target_price=target_price,
                 current_price=current_price,
+                highest_price=entry_price,
                 unrealized_pnl=0.0,
                 status="open",
                 signal_run_id=sig.id,
@@ -339,19 +399,21 @@ class PaperTradingEngine:
                 strategy_code=sig.strategy_code or "",
             )
             db.add(pos)
-            account.current_capital -= cost
-            market_cash[mkt] = market_cash.get(mkt, 0.0) - cost
+            account.current_capital -= buy_outlay
+            market_cash[mkt] = avail - buy_outlay
             open_keys.add((sig.stock_symbol, sig.stock_market))
             new_keys.add((sig.stock_symbol, sig.stock_market))
             entry_events.append((pos, sig))
             opened += 1
             logger.info(
-                "[模拟盘] 建仓: %s %s @ %.2f, 止损=%.2f, 止盈=%s, 策略=%s",
+                "[模拟盘] 建仓: %s %s @ %.2f x%d, 止损=%.2f, 止盈=%s, 买入费=%.2f, 策略=%s",
                 sig.stock_name or sig.stock_symbol,
                 sig.stock_market,
                 entry_price,
-                sig.stop_loss or 0,
-                sig.target_price or "无",
+                quantity,
+                stop_loss or 0,
+                target_price or "无",
+                buy_fill.explicit_fees + buy_fill.slippage_cost,
                 sig.strategy_code,
             )
 
@@ -369,8 +431,12 @@ class PaperTradingEngine:
     ) -> PaperTradingTrade:
         """平仓单个持仓，返回交易记录。"""
         now = _utc_now()
-        pnl = (exit_price - pos.entry_price) * pos.quantity
-        pnl_pct = ((exit_price - pos.entry_price) / pos.entry_price * 100) if pos.entry_price > 0 else 0.0
+        # 含交易成本的净盈亏:卖出净回收 − 建仓含费投入(与建仓口径一致,资金守恒)
+        buy_cost = -COST_MODEL.fill("buy", pos.entry_price, pos.quantity).cash_delta
+        sell_fill = COST_MODEL.fill("sell", exit_price, pos.quantity)
+        sell_proceeds = sell_fill.cash_delta
+        pnl = round(sell_proceeds - buy_cost, 4)
+        pnl_pct = (pnl / buy_cost * 100) if buy_cost > 0 else 0.0
 
         holding_days = 0
         if pos.opened_at:
@@ -403,8 +469,8 @@ class PaperTradingEngine:
         pos.current_price = exit_price
         pos.unrealized_pnl = pnl
 
-        # 回收资金
-        account.current_capital += exit_price * pos.quantity
+        # 回收资金(卖出净回收,已扣卖出费)
+        account.current_capital += sell_proceeds
         account.total_pnl += pnl
         account.total_trades += 1
         if pnl > 0:
@@ -450,9 +516,13 @@ class PaperTradingEngine:
             if current_price is None or current_price <= 0:
                 continue
 
-            # 更新现价和浮动盈亏
+            # 更新现价、净浮动盈亏(含若此刻平仓的双边成本)、持仓期最高价
             pos.current_price = current_price
-            pos.unrealized_pnl = (current_price - pos.entry_price) * pos.quantity
+            _buy_cost_u = -COST_MODEL.fill("buy", pos.entry_price, pos.quantity).cash_delta
+            _sell_u = COST_MODEL.fill("sell", current_price, pos.quantity).cash_delta
+            pos.unrealized_pnl = round(_sell_u - _buy_cost_u, 4)
+            if pos.highest_price is None or current_price > pos.highest_price:
+                pos.highest_price = current_price
 
             # 检查止损
             if pos.stop_loss and current_price <= pos.stop_loss:
@@ -468,20 +538,55 @@ class PaperTradingEngine:
                 closed += 1
                 continue
 
+            # 移动止损:浮盈达标后,从持仓最高价回撤超阈值则离场
+            if pos.highest_price and pos.entry_price > 0:
+                profit_ratio = (pos.highest_price - pos.entry_price) / pos.entry_price
+                if profit_ratio >= MIN_PROFIT_FOR_TRAILING:
+                    trail_line = pos.highest_price * (1 - TRAILING_STOP_PCT)
+                    if current_price <= trail_line:
+                        trade = self._close_position(db, account, pos, current_price, "trailing_stop")
+                        exit_events.append((pos, trade))
+                        closed += 1
+                        continue
+
             # 检查信号反转
             if pos.signal_run_id:
-                latest = (
-                    db.query(StrategySignalRun)
-                    .filter(
-                        StrategySignalRun.stock_symbol == pos.stock_symbol,
-                        StrategySignalRun.stock_market == pos.stock_market,
-                        StrategySignalRun.status == "active",
+                # no_autoflush: 信号查询是只读的,不要把本轮累积的持仓现价更新提前 flush——
+                # 否则扫描中途会反复抢 SQLite 写锁,与其它调度器并发写时触发 "database is locked"。
+                # 所有写入统一在本方法末尾 db.commit() 时一次性落盘。
+                with db.no_autoflush:
+                    latest = (
+                        db.query(StrategySignalRun)
+                        .filter(
+                            StrategySignalRun.stock_symbol == pos.stock_symbol,
+                            StrategySignalRun.stock_market == pos.stock_market,
+                            StrategySignalRun.status == "active",
+                        )
+                        .order_by(StrategySignalRun.created_at.desc())
+                        .first()
                     )
-                    .order_by(StrategySignalRun.created_at.desc())
-                    .first()
-                )
                 if latest and latest.action in ("sell", "reduce"):
                     trade = self._close_position(db, account, pos, current_price, "signal_reversal")
+                    exit_events.append((pos, trade))
+                    closed += 1
+                    continue
+
+            # 时间止损:持有超过最大自然日离场(优先用 signal 的 holding_days)
+            max_days = DEFAULT_TIME_STOP_DAYS
+            if pos.signal_run_id:
+                sig_hold = (
+                    db.query(StrategySignalRun.holding_days)
+                    .filter(StrategySignalRun.id == pos.signal_run_id)
+                    .scalar()
+                )
+                if sig_hold and int(sig_hold) > 0:
+                    max_days = int(sig_hold)
+            if pos.opened_at:
+                opened_dt = pos.opened_at
+                if opened_dt.tzinfo is None:
+                    opened_dt = opened_dt.replace(tzinfo=timezone.utc)
+                if (_utc_now() - opened_dt).days >= max_days:
+                    trade = self._close_position(db, account, pos, current_price, "time_stop")
                     exit_events.append((pos, trade))
                     closed += 1
                     continue
@@ -568,13 +673,9 @@ class PaperTradingEngine:
             if not pos:
                 return {"ok": False, "error": "持仓不存在或已平仓"}
 
-            # 获取最新报价(走 orchestrator,支持故障转移)
+            # 获取最新报价(走 flag 门控的 md_quote_rows,支持故障转移)
             mc = _to_market(pos.stock_market)
-            orch = get_quote_orchestrator()
-            resp = orch.fetch_sync(
-                ProviderRequest(symbols=(pos.stock_symbol,), market=mc.value)
-            )
-            rows = resp.data if resp.success and resp.data else []
+            rows = md_quote_rows([pos.stock_symbol], mc.value)
 
             exit_price = pos.current_price or pos.entry_price
             if rows:

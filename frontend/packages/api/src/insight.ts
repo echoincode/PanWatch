@@ -52,4 +52,54 @@ export const insightApi = {
         include_quotes: params?.include_quotes,
       })
     ),
+
+  addPositionEval: (params: AddPositionEvalParams) =>
+    fetchAPI<AddPositionEvalResult>('/insights/add-position-eval', {
+      method: 'POST',
+      body: JSON.stringify(params),
+      timeoutMs: 60000, // AI 评估较慢,放宽超时
+    }),
+
+  announcementEval: (params: { symbol: string; market: string; model_id?: number }) =>
+    fetchAPI<AnnouncementEvalResult>('/insights/announcement-eval', {
+      method: 'POST',
+      body: JSON.stringify(params),
+      timeoutMs: 40000,
+    }),
+}
+
+export interface AnnouncementToneItem {
+  title: string
+  time: string
+  tone: string // 利好 / 利空 / 中性
+  summary: string
+}
+
+export interface AnnouncementEvalResult {
+  symbol: string
+  market: string
+  items: AnnouncementToneItem[]
+}
+
+export interface AddPositionEvalParams {
+  symbol: string
+  market: string
+  current_quantity: number
+  current_cost: number
+  add_quantity: number
+  add_price: number
+  model_id?: number
+}
+
+export interface AddPositionEvalResult {
+  symbol: string
+  market: string
+  action: string // 加仓 / 建仓
+  new_cost: number
+  dilute_abs: number
+  dilute_pct: number
+  total_quantity: number
+  total_invested: number
+  verdict: string // 适合 / 谨慎 / 不适合 / 未知
+  content: string // markdown 结论
 }

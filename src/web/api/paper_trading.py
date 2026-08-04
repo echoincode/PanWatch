@@ -16,6 +16,8 @@ from src.core.paper_trading_engine import (
     market_allocations_or_default,
     normalize_allocations,
 )
+from src.core.portfolio_diagnostics import diagnose_paper_portfolio
+from src.core.quant_adapters import available_backends
 from src.web.database import get_db
 from src.web.models import (
     AppSettings,
@@ -412,6 +414,18 @@ def get_metrics(market: str | None = None, db: Session = Depends(get_db)):
         "open_positions": open_count,
         "strategy_performance": _strategy_performance(db, mkt),
     }
+
+
+@router.get("/diagnostics")
+def get_diagnostics():
+    """组合诊断(只读):集中度/市场与策略分布/风险提示。"""
+    return diagnose_paper_portfolio()
+
+
+@router.get("/backends")
+def get_backends():
+    """可用回测后端探测(builtin 永远可用;vectorbt/rqalpha/qlib 视安装情况)。"""
+    return available_backends()
 
 
 @router.post("/account/toggle")

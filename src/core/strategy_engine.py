@@ -17,6 +17,7 @@ from src.core.strategy_catalog import (
     get_strategy_profile_map,
     list_strategy_catalog,
 )
+from src.core.factor_weights import get_factor_weights
 from src.core.timezone import to_iso_with_tz, utc_now
 from src.models.market import MarketCode
 from src.web.database import SessionLocal
@@ -787,6 +788,7 @@ def _compute_factor_breakdown(
     regime_info: dict | None,
     cross_feature: dict | None = None,
     news_metric: dict | None = None,
+    factor_weights: dict | None = None,
 ) -> dict:
     base_score = float(row.score or 0.0)
     action = (row.action or "watch").strip().lower() or "watch"
@@ -873,9 +875,18 @@ def _compute_factor_breakdown(
     regime_multiplier += _clamp((regime_confidence - 0.5) * 0.06, -0.03, 0.03)
     regime_multiplier = _clamp(regime_multiplier, 0.85, 1.12)
 
-    raw_score = base_score + alpha_score + catalyst_score + quality_score + source_bonus
-    raw_score -= risk_penalty
-    raw_score -= crowd_penalty
+    # 每因子外置权重(默认 1.0 → 行为 = 现状,零回归)。snapshot 仍存 raw 因子分,
+    # 权重只作用于合成,确保 IC 测在原始因子上(见 factor_calibration 设计要点)。
+    fw = factor_weights or {}
+    raw_score = (
+        base_score
+        + fw.get("alpha_score", 1.0) * alpha_score
+        + fw.get("catalyst_score", 1.0) * catalyst_score
+        + fw.get("quality_score", 1.0) * quality_score
+        + source_bonus  # v1: source_bonus 权重固定 1.0
+    )
+    raw_score -= fw.get("risk_penalty", 1.0) * risk_penalty
+    raw_score -= fw.get("crowd_penalty", 1.0) * crowd_penalty
     has_entry = row.entry_low is not None or row.entry_high is not None
     if action in ("buy", "add") and not has_entry:
         # No entry window means this is not executable; force into watch semantics.
@@ -1250,6 +1261,7 @@ def refresh_strategy_signals(
             existing[(int(cand_id), str(code or ""))] = row
 
         weight_cache: dict[str, dict[str, float]] = {}
+        factor_weight_cache: dict[str, dict[str, float]] = {}
         touched_keys: set[tuple[int, str]] = set()
         touched_rows: list[StrategySignalRun] = []
 
@@ -1259,6 +1271,10 @@ def refresh_strategy_signals(
             if weights is None:
                 weights = get_effective_weight_map(market=market, regime="default")
                 weight_cache[market] = weights
+            factor_weights = factor_weight_cache.get(market)
+            if factor_weights is None:
+                factor_weights = get_factor_weights(market, db=db)
+                factor_weight_cache[market] = factor_weights
             codes = _strategy_codes_for_candidate(c)
             for code in codes:
                 profile = profile_map.get(code) or profile_map.get("watchlist_agent") or {}
@@ -1285,6 +1301,7 @@ def refresh_strategy_signals(
                     regime_info=regime_info,
                     cross_feature=cross_features.get(int(c.id)) if c.id is not None else None,
                     news_metric=normalized_news_metric,
+                    factor_weights=factor_weights,
                 )
                 rank_score = float(score_breakdown.get("weighted_score") or 0.0)
                 confidence = c.confidence if c.confidence is not None else round(rank_score / 100.0, 3)
@@ -1567,6 +1584,7 @@ def evaluate_strategy_outcomes(
 
         today = date.today()
         kline_cache: dict[tuple[str, str], list] = {}
+        pending = 0  # 分批提交计数,缩短写事务窗口
 
         for s in signals:
             snap_day = _parse_day(s.snapshot_date)
@@ -1662,6 +1680,12 @@ def evaluate_strategy_outcomes(
                 )
                 stats["evaluated"] += 1
                 existing.add((s.id, horizon))
+                pending += 1
+
+            # 分批提交:累计到阈值即落盘,缩短写事务,避免与 60s 调度器并发写长时间持锁
+            if pending >= 50:
+                db.commit()
+                pending = 0
 
         db.commit()
         return stats

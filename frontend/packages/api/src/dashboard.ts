@@ -23,6 +23,8 @@ export interface DashboardMarketIndex {
   change_pct: number | null
   change_amount: number | null
   prev_close: number | null
+  /** 近20日收盘价,用于首页指数走势 sparkline;取数失败/无映射(如美股指数)则为空数组 */
+  spark?: number[]
 }
 
 export interface DashboardMarketStatus {
@@ -57,6 +59,8 @@ export interface DashboardAccountSummary {
   total_market_value: number
   total_pnl: number
   total_pnl_pct: number
+  /** 今日盈亏(账户内所有持仓 daily_pnl 汇总,元) */
+  total_daily_pnl: number
   total_assets: number
   positions: DashboardPosition[]
 }
@@ -68,6 +72,8 @@ export interface DashboardPortfolioSummary {
     total_cost: number
     total_pnl: number
     total_pnl_pct: number
+    /** 今日盈亏(全账户汇总,元) */
+    total_daily_pnl: number
     available_funds: number
     total_assets: number
   }
@@ -268,4 +274,39 @@ export const dashboardApi = {
       timeoutMs: 45000,
     })
   },
+
+  curate: (candidates: CurateCandidate[], model_id?: number) =>
+    fetchAPI<{ items: CuratedItem[] }>('/dashboard/curate', {
+      method: 'POST',
+      body: JSON.stringify({ candidates, model_id }),
+      timeoutMs: 40000,
+    }),
+
+  brief: (type: 'premarket' | 'eod') =>
+    fetchAPI<DashboardBrief>(`/dashboard/brief?type=${type}`),
+}
+
+export interface DashboardBrief {
+  empty?: boolean
+  type: string
+  agent_label?: string
+  title?: string
+  content?: string
+  date?: string
+  updated_at?: string
+}
+
+export interface CurateCandidate {
+  type: string
+  symbol?: string
+  name?: string
+  market?: string
+  signal?: string
+  change_pct?: number | null
+}
+
+export interface CuratedItem {
+  index: number
+  importance: number
+  why: string
 }

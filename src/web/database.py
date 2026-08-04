@@ -134,6 +134,12 @@ def _backup_db_before_migration() -> None:
 def _migrate(engine):
     """增量 schema 迁移（SQLite ALTER TABLE ADD COLUMN）"""
     migrations = [
+        # Phase 1(模拟盘求真):持仓期最高价,移动止损用
+        (
+            "paper_trading_positions",
+            "highest_price",
+            "ALTER TABLE paper_trading_positions ADD COLUMN highest_price REAL",
+        ),
         (
             "stock_agents",
             "schedule",

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, RefreshCw, Sparkles } from 'lucide-react'
+import { AlertTriangle, RefreshCw, Share2, Sparkles } from 'lucide-react'
 import {
   recommendationsApi,
   stocksApi,
@@ -12,6 +12,8 @@ import { Button } from '@panwatch/base-ui/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@panwatch/base-ui/components/ui/select'
 import { useLocalStorage } from '@/lib/utils'
 import StockInsightModal from '@panwatch/biz-ui/components/stock-insight-modal'
+import FactorWeightsPanel from '@/components/FactorWeightsPanel'
+import SignalScoreShareCard from '@/components/SignalScoreShareCard'
 
 type SourceFilter = 'all' | 'market_scan' | 'watchlist' | 'mixed'
 type HoldingFilter = 'all' | 'held' | 'unheld'
@@ -241,6 +243,9 @@ export default function OpportunitiesPage() {
   const [insightMarket, setInsightMarket] = useState('CN')
   const [insightName, setInsightName] = useState<string | undefined>(undefined)
   const [insightHasPosition, setInsightHasPosition] = useState(false)
+
+  // 个股 AI 评分分享卡:当前分享的信号
+  const [shareSignal, setShareSignal] = useState<StrategySignalItem | null>(null)
 
   const openInsight = useCallback((item: StrategySignalItem) => {
     setInsightSymbol(item.stock_symbol)
@@ -738,6 +743,14 @@ export default function OpportunitiesPage() {
                     <div className={`text-[12px] font-mono mt-1 ${Number(item.rank_score || item.score || 0) >= 80 ? 'text-primary' : 'text-muted-foreground'}`}>
                       评分 {Math.round(item.rank_score || item.score || 0)}
                     </div>
+                    {item.ai_score != null && (
+                      <div className="mt-1 flex items-center justify-end gap-1">
+                        <span className="text-[10px] text-muted-foreground">AI</span>
+                        <span className={`inline-flex items-center justify-center min-w-[18px] px-1.5 py-0.5 rounded text-[11px] font-semibold ${item.ai_score >= 8 ? 'bg-green-500/20 text-green-400' : item.ai_score >= 6 ? 'bg-primary/20 text-primary' : item.ai_score >= 4 ? 'bg-amber-500/20 text-amber-400' : 'bg-red-500/20 text-red-400'}`}>
+                          {item.ai_score}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
                 <div className="mt-2 text-[12px] text-foreground line-clamp-2">{item.signal || item.reason || '--'}</div>
@@ -768,6 +781,20 @@ export default function OpportunitiesPage() {
                   <div>相对强弱: {crossFeature.relative_strength_pct != null ? `${Number(crossFeature.relative_strength_pct).toFixed(0)}分位` : '--'}</div>
                   <div>事件催化: {eventScore != null ? eventScore.toFixed(1) : '--'}{eventCount > 0 ? `（${eventCount}条）` : '（无命中）'}</div>
                 </div>
+                {item.factor_explain && (((item.factor_explain.positive?.length ?? 0) > 0) || ((item.factor_explain.negative?.length ?? 0) > 0)) && (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {(item.factor_explain.positive ?? []).map((f) => (
+                      <span key={`p-${f.factor}`} className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-green-500/15 text-green-400">
+                        {f.label} +{Math.abs(f.contribution).toFixed(1)}
+                      </span>
+                    ))}
+                    {(item.factor_explain.negative ?? []).map((f) => (
+                      <span key={`n-${f.factor}`} className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-red-500/15 text-red-400">
+                        {f.label} {f.contribution.toFixed(1)}
+                      </span>
+                    ))}
+                  </div>
+                )}
                 {item.constrained && (
                   <div className="mt-2 text-[10px] text-amber-400">
                     组合约束: {(item.constraint_reasons || []).join('；') || '已自动降级'}
@@ -779,7 +806,18 @@ export default function OpportunitiesPage() {
                 <div className="text-[10px] text-muted-foreground">
                   来源: {sourceFlags.join(' + ')}
                 </div>
-                <div className="text-[10px] text-muted-foreground">评估: 自动后验</div>
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setShareSignal(item)}
+                    className="inline-flex items-center gap-1 text-[10px] text-muted-foreground transition-colors hover:text-primary"
+                    title="生成 AI 评分分享图"
+                  >
+                    <Share2 className="h-3 w-3" />
+                    分享图
+                  </button>
+                  <div className="text-[10px] text-muted-foreground">评估: 自动后验</div>
+                </div>
               </div>
             </div>
           )
@@ -790,6 +828,16 @@ export default function OpportunitiesPage() {
         <div className="card p-8 text-center text-[12px] text-muted-foreground mt-4">暂无满足条件的机会</div>
       )}
 
+      <details className="mt-6 group">
+        <summary className="cursor-pointer list-none flex items-center gap-2 text-[12px] font-medium text-muted-foreground hover:text-foreground transition-colors">
+          <span className="text-[11px] opacity-60 transition-transform group-open:rotate-90">▶</span>
+          因子权重与战绩
+        </summary>
+        <div className="mt-3">
+          <FactorWeightsPanel />
+        </div>
+      </details>
+
       <StockInsightModal
         open={insightOpen}
         onOpenChange={setInsightOpen}
@@ -798,6 +846,14 @@ export default function OpportunitiesPage() {
         stockName={insightName}
         hasPosition={insightHasPosition}
       />
+
+      {shareSignal && (
+        <SignalScoreShareCard
+          open={!!shareSignal}
+          onClose={() => setShareSignal(null)}
+          item={shareSignal}
+        />
+      )}
     </div>
   )
 }

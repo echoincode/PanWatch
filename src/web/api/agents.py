@@ -574,6 +574,49 @@ def get_tradingagents_analysis(
     }
 
 
+@router.get("/tradingagents/analysis/pdf")
+def export_tradingagents_analysis_pdf(
+    stock_symbol: str = Query(..., description="股票代码"),
+    analysis_date: str = Query(..., description="分析日期 YYYY-MM-DD"),
+    db: Session = Depends(get_db),
+):
+    """把某次 TradingAgents 深度分析报告导出为 PDF 文件(后台直出,不依赖 Chromium)。
+
+    返回 application/pdf(ResponseWrapperMiddleware 对非 JSON 原样放行,不会包裹)。
+    """
+    from urllib.parse import quote
+
+    from fastapi import HTTPException
+    from fastapi.responses import Response
+
+    from src.core.pdf_export import assemble_report_markdown, render_analysis_pdf
+    from src.web.models import AnalysisHistory
+
+    record = (
+        db.query(AnalysisHistory)
+        .filter(
+            AnalysisHistory.agent_name == "tradingagents",
+            AnalysisHistory.stock_symbol == stock_symbol,
+            AnalysisHistory.analysis_date == analysis_date,
+        )
+        .order_by(AnalysisHistory.updated_at.desc(), AnalysisHistory.id.desc())
+        .first()
+    )
+    if not record:
+        raise HTTPException(status_code=404, detail="未找到该深度分析记录")
+
+    # 用 raw_data 拼详情页同款完整分节(含 4 分析师全文 + 辩论全文);raw_data 缺失时回退 content
+    report_md = assemble_report_markdown(record.raw_data or {}) or (record.content or "")
+    pdf_bytes = render_analysis_pdf(record.title or "深度分析", report_md)
+    base = (record.title or f"{stock_symbol} 深度分析").replace("/", "-").replace("\\", "-").strip()
+    filename = f"{base}-{analysis_date}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
+
+
 @router.get("/tradingagents/history-comparison")
 def get_tradingagents_history_comparison(
     stock_symbol: str = Query(..., description="股票代码,如 300418"),
@@ -792,7 +835,7 @@ async def scan_intraday(analyze: bool = False, db: Session = Depends(get_db)):
         load_portfolio_for_agent,
         build_context,
     )
-    from src.collectors.akshare_collector import AkshareCollector
+    from src.core.marketdata_client import md_stock_data
     from src.collectors.kline_collector import KlineCollector
     from src.models.market import MarketCode, MARKETS
     from src.agents.intraday_monitor import IntradayMonitorAgent
@@ -848,8 +891,7 @@ async def scan_intraday(analyze: bool = False, db: Session = Depends(get_db)):
 
     async def _fetch_market_quotes(market_code: MarketCode, symbols: list[str]):
         try:
-            collector = AkshareCollector(market_code)
-            return await collector.get_stock_data(symbols)
+            return await asyncio.to_thread(md_stock_data, symbols, market_code.value)
         except Exception as e:
             logger.error(f"采集 {market_code.value} 行情失败: {e}")
             return []

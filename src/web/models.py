@@ -753,6 +753,54 @@ class StrategyWeightHistory(Base):
     created_at = Column(DateTime, server_default=func.now())
 
 
+class FactorWeight(Base):
+    """因子权重（当前生效值）——每因子 × 市场,由 IC/IR 自动标定 + 可手动覆盖。
+
+    镜像 StrategyWeight,但作用于因子级(alpha/catalyst/quality/risk/crowd),
+    让信号合成从「隐式权重=1 的黑盒」变成「外置可标定」。
+    """
+
+    __tablename__ = "factor_weights"
+    __table_args__ = (
+        UniqueConstraint("factor_code", "market", name="uq_factor_weight_key"),
+        Index("ix_factor_weight_effective", "effective_from"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    factor_code = Column(String, nullable=False)
+    market = Column(String, nullable=False, default="CN")  # CN/HK/US
+    weight = Column(Float, nullable=False, default=1.0)
+    is_pinned = Column(Boolean, nullable=False, default=False)  # 手动锁定,标定跳过
+    auto_calibrate = Column(Boolean, nullable=False, default=True)  # 关掉则标定跳过
+    reason = Column(String, default="")
+    meta = Column(JSON, default={})
+    effective_from = Column(DateTime, server_default=func.now())
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class FactorWeightHistory(Base):
+    """因子调权历史(审计)。"""
+
+    __tablename__ = "factor_weight_history"
+    __table_args__ = (
+        Index("ix_factor_weight_history_time", "created_at"),
+        Index("ix_factor_weight_history_factor_market", "factor_code", "market"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    factor_code = Column(String, nullable=False)
+    market = Column(String, nullable=False, default="CN")
+    old_weight = Column(Float, nullable=False, default=1.0)
+    new_weight = Column(Float, nullable=False, default=1.0)
+    ic = Column(Float, nullable=True)
+    ir = Column(Float, nullable=True)
+    sample_size = Column(Integer, default=0)
+    reason = Column(String, default="")  # auto/manual/pinned_skip/auto_off/insufficient_samples
+    meta = Column(JSON, default={})
+    created_at = Column(DateTime, server_default=func.now())
+
+
 class MarketRegimeSnapshot(Base):
     """市场状态快照（用于按市场动态调权与解释）。"""
 
@@ -961,6 +1009,7 @@ class PaperTradingPosition(Base):
     stop_loss = Column(Float, nullable=True)
     target_price = Column(Float, nullable=True)
     current_price = Column(Float, nullable=True)
+    highest_price = Column(Float, nullable=True)  # 持仓期最高价(移动止损用)
     unrealized_pnl = Column(Float, nullable=False, default=0.0)
     status = Column(String, nullable=False, default="open")  # open/closed
     signal_run_id = Column(Integer, nullable=True)

@@ -21,6 +21,7 @@ import { KlineIndicators } from '@panwatch/biz-ui/components/kline-indicators'
 import { buildKlineSuggestion } from '@/lib/kline-scorer'
 import StockPriceAlertPanel from '@panwatch/biz-ui/components/stock-price-alert-panel'
 import { TechnicalBadge } from '@panwatch/biz-ui/components/technical-badge'
+import AddPositionCalculator from '@panwatch/biz-ui/components/add-position-calculator'
 
 interface QuoteResponse {
   symbol: string
@@ -1480,6 +1481,13 @@ export default function StockInsightModal(props: {
                       ) : (
                         <div className="text-[11px] text-muted-foreground">未在持仓中</div>
                       )}
+                      <AddPositionCalculator
+                        symbol={symbol}
+                        market={market}
+                        currentQuantity={holdingAgg?.quantity ?? 0}
+                        currentCost={holdingAgg?.unitCost ?? 0}
+                        currentPrice={quote?.current_price ?? null}
+                      />
                     </div>
                   </div>
 

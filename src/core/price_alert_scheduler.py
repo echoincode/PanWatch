@@ -50,12 +50,15 @@ class PriceAlertScheduler:
             self._scan_job,
             "interval",
             seconds=self.interval_seconds,
+            jitter=20,  # 抖动错峰,避免与模拟盘扫描每 60s 同刻并发写 SQLite
             id="price_alert_scan",
             replace_existing=True,
             coalesce=True,
             max_instances=1,
         )
         self.scheduler.start()
+        from src.core.scheduler_registry import register
+        register("price_alert", self.scheduler)
         logger.info(f"价格提醒调度器已启动，扫描间隔 {self.interval_seconds}s")
 
     def shutdown(self):

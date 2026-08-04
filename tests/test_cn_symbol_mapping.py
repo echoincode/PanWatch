@@ -1,9 +1,7 @@
 import unittest
 
-from src.collectors.akshare_collector import _tencent_symbol as ak_tencent_symbol
-from src.collectors.capital_flow_collector import _get_eastmoney_secid
-from src.collectors.kline_collector import _tencent_symbol as kline_tencent_symbol
-from src.collectors.news_collector import XueqiuNewsCollector
+from marketdata.symbol import Symbol
+
 from src.collectors.screenshot_collector import ScreenshotCollector
 from src.core.cn_symbol import get_cn_exchange, get_cn_prefix, is_cn_sh
 from src.models.market import MarketCode
@@ -28,29 +26,13 @@ class TestCnSymbolMapping(unittest.TestCase):
         self.assertTrue(is_cn_sh("600519"))
         self.assertFalse(is_cn_sh("000738"))
 
-    def test_akshare_tencent_symbol_uses_unified_mapping(self):
-        """akshare 腾讯代码 — 使用统一映射"""
-        self.assertEqual(ak_tencent_symbol("000738", MarketCode.CN), "sz000738")
-        self.assertEqual(ak_tencent_symbol("600519", MarketCode.CN), "sh600519")
-        self.assertEqual(ak_tencent_symbol("920001", MarketCode.CN), "bj920001")
-
-    def test_kline_tencent_symbol_uses_unified_mapping(self):
-        """K线腾讯代码 — 使用统一映射"""
-        self.assertEqual(kline_tencent_symbol("000738", MarketCode.CN), "sz000738")
-        self.assertEqual(kline_tencent_symbol("600519", MarketCode.CN), "sh600519")
-        self.assertEqual(kline_tencent_symbol("920001", MarketCode.CN), "bj920001")
-
     def test_capital_flow_secid(self):
-        """东方财富 secid — SZ 用 0 前缀，SH 用 1 前缀"""
-        self.assertEqual(_get_eastmoney_secid("000738", MarketCode.CN), "0.000738")
-        self.assertEqual(_get_eastmoney_secid("600519", MarketCode.CN), "1.600519")
+        """东方财富 secid — SZ 用 0 前缀，SH 用 1 前缀（marketdata 包 Symbol）"""
+        self.assertEqual(Symbol.parse("000738", market="CN").to_eastmoney_secid(), "0.000738")
+        self.assertEqual(Symbol.parse("600519", market="CN").to_eastmoney_secid(), "1.600519")
 
-    def test_xueqiu_news_symbol_id(self):
-        """雪球新闻 symbol — 大写前缀"""
-        collector = XueqiuNewsCollector()
-        self.assertEqual(collector._get_symbol_id("000738"), "SZ000738")
-        self.assertEqual(collector._get_symbol_id("600519"), "SH600519")
-        self.assertEqual(collector._get_symbol_id("510300"), "SH510300")
+    # 雪球新闻 symbol 前缀映射测试已随 XueqiuNewsCollector 收口进 marketdata 包，
+    # 对应用例见 packages/marketdata/tests/test_news.py::test_xueqiu_symbol_id_prefix_rules。
 
     def test_screenshot_urls(self):
         """截图 URL — 新浪/雪球/东方财富"""

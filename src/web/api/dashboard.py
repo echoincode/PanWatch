@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import logging
+import re
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from src.config import Settings
 from src.core.strategy_engine import get_strategy_stats, list_strategy_signals
+from src.web.api.chat import _get_ai_client
 from src.web.database import get_db
 from src.web.models import (
     AnalysisHistory,
@@ -382,4 +386,97 @@ def get_dashboard_overview(
             "top_by_strategy": top_strategy_rows,
         },
         "insights": _load_latest_insights(db),
+    }
+
+
+logger = logging.getLogger(__name__)
+
+
+# ── 今日必读 AI 策展(Phase C)────────────────────────────────────────────
+class CurateCandidate(BaseModel):
+    type: str
+    symbol: str = ""
+    name: str = ""
+    market: str = "CN"
+    signal: str = ""
+    change_pct: float | None = None
+
+
+class CurateRequest(BaseModel):
+    candidates: list[CurateCandidate]
+    model_id: int | None = None
+
+
+@router.post("/curate")
+async def curate_today(req: CurateRequest, db: Session = Depends(get_db)):
+    """把首页候选事件交 AI 排序+精炼,返回 [{index, importance, why}];AI 失败按原序兜底。"""
+    cands = req.candidates[:20]
+    if not cands:
+        return {"items": []}
+
+    listing = "\n".join(
+        f"{i}. [{c.type}] {c.name or c.symbol}"
+        + (f" {c.change_pct:+.2f}%" if c.change_pct is not None else "")
+        + (f" {c.signal}" if c.signal else "")
+        for i, c in enumerate(cands)
+    )
+    system_prompt = (
+        "你是盯盘助手。从用户今日候选事件里挑出最值得关注的,按重要度排序,"
+        "重点关照:已触发的提醒、持仓的大幅异动、组合风险。"
+        "只输出每条一行,格式: 序号|重要度(0-100整数)|一句话说明为什么值得看。不解释、不臆造。"
+    )
+    user_content = f"今日候选(均来自该用户的持仓/自选/提醒/机会):\n{listing}"
+
+    items: list[dict] = []
+    try:
+        content = await _get_ai_client(db, req.model_id).chat(
+            system_prompt, user_content, temperature=0.3
+        )
+        for line in (content or "").splitlines():
+            parts = line.split("|")
+            idx_raw = parts[0].strip().rstrip(".、) ")
+            if len(parts) >= 3 and idx_raw.isdigit():
+                i = int(idx_raw)
+                if 0 <= i < len(cands):
+                    try:
+                        imp = int(re.sub(r"[^0-9]", "", parts[1]) or 0)
+                    except Exception:
+                        imp = 0
+                    items.append({"index": i, "importance": imp, "why": parts[2].strip()})
+    except Exception as e:
+        logger.debug(f"curate AI 失败,按原序兜底: {e}")
+
+    if not items:  # 兜底:原序 + 递减重要度
+        items = [
+            {"index": i, "importance": max(0, 100 - i * 5), "why": c.signal or ""}
+            for i, c in enumerate(cands)
+        ]
+    items.sort(key=lambda x: x["importance"], reverse=True)
+    return {"items": items}
+
+
+@router.get("/brief")
+def get_brief(type: str = Query("eod", description="premarket | eod"), db: Session = Depends(get_db)):
+    """盘前/盘后 AI 简报(复用 premarket_outlook / daily_report agent 的最新报告)。"""
+    agent = "premarket_outlook" if type == "premarket" else "daily_report"
+    label = "盘前分析" if type == "premarket" else "收盘复盘"
+    row = (
+        db.query(AnalysisHistory)
+        .filter(AnalysisHistory.agent_name == agent)
+        .order_by(
+            AnalysisHistory.analysis_date.desc(),
+            AnalysisHistory.updated_at.desc(),
+            AnalysisHistory.id.desc(),
+        )
+        .first()
+    )
+    if not row:
+        return {"empty": True, "type": type, "agent_label": label}
+    return {
+        "type": type,
+        "agent_label": label,
+        "title": row.title or "",
+        "content": row.content or "",
+        "date": row.analysis_date or "",
+        "updated_at": _format_datetime(row.updated_at),
     }

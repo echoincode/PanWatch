@@ -26,6 +26,8 @@ from src.core.strategy_engine import (
     rebalance_strategy_weights,
     refresh_strategy_signals,
 )
+from src.core.factor_eval import evaluate_factor_ic
+from src.core.signal_explain import enrich_signal
 from src.web.database import SessionLocal
 from src.web.models import StrategySignalRun
 
@@ -230,7 +232,7 @@ def get_strategy_signal_list(
     risk_level: str = Query("", description="风险等级: low/medium/high/all"),
     include_payload: bool = Query(False, description="是否返回完整 payload（默认否，提升性能）"),
 ):
-    return list_strategy_signals(
+    result = list_strategy_signals(
         market=market,
         status=status,
         min_score=min_score,
@@ -242,6 +244,10 @@ def get_strategy_signal_list(
         risk_level=risk_level,
         include_payload=include_payload,
     )
+    # Phase 3: 注入 1-10 可解释评分 + 正负因子拆解
+    for _it in result.get("items", []):
+        enrich_signal(_it)
+    return result
 
 
 @router.get("/strategy-regimes")
@@ -357,6 +363,15 @@ def rebalance_strategy_weights_api(
 @router.get("/strategy-stats")
 def strategy_stats(days: int = Query(45, ge=1, le=365)):
     return get_strategy_stats(days=days)
+
+
+@router.get("/strategy-factor-ic")
+def strategy_factor_ic(
+    days: int = Query(90, ge=7, le=365, description="回看快照天数"),
+    horizon: int = Query(5, ge=1, le=60, description="持有期(交易日)"),
+):
+    """各因子的 IC/IR 有效性评估(StrategyFactorSnapshot × StrategyOutcome)。"""
+    return evaluate_factor_ic(days=days, horizon=horizon)
 
 
 @router.get("/strategy-weight-history")

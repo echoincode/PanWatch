@@ -167,6 +167,11 @@ export interface StrategySignalItem {
     weight?: number
     has_entry_plan?: boolean
   }
+  ai_score?: number
+  factor_explain?: {
+    positive?: { factor: string; label: string; contribution: number }[]
+    negative?: { factor: string; label: string; contribution: number }[]
+  }
   market_regime?: {
     regime?: string
     regime_label?: string

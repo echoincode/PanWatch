@@ -212,6 +212,47 @@ def delete_alert_rule(rule_id: int, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
+@router.get("/hits/today")
+def list_today_hits(limit: int = 50, db: Session = Depends(get_db)):
+    """今日(本地时区)全部命中,跨规则聚合 —— 供首页"今日要紧事"。"""
+    tz_name = Settings().app_timezone or "UTC"
+    try:
+        tzinfo = ZoneInfo(tz_name)
+    except Exception:
+        tzinfo = timezone.utc
+    local_midnight = datetime.now(tzinfo).replace(hour=0, minute=0, second=0, microsecond=0)
+    start_utc = local_midnight.astimezone(timezone.utc).replace(tzinfo=None)
+
+    hits = (
+        db.query(PriceAlertHit)
+        .filter(PriceAlertHit.trigger_time >= start_utc)
+        .order_by(PriceAlertHit.trigger_time.desc(), PriceAlertHit.id.desc())
+        .limit(max(1, min(int(limit), 200)))
+        .all()
+    )
+    if not hits:
+        return []
+    rule_map = {r.id: r for r in db.query(PriceAlertRule).all()}
+    stock_ids = {h.stock_id for h in hits}
+    stock_map = {s.id: s for s in db.query(Stock).filter(Stock.id.in_(stock_ids)).all()}
+    out = []
+    for h in hits:
+        stock = stock_map.get(h.stock_id)
+        rule = rule_map.get(h.rule_id)
+        out.append(
+            {
+                "rule_id": h.rule_id,
+                "rule_name": (rule.name if rule else "") or "提醒",
+                "symbol": stock.symbol if stock else "",
+                "name": stock.name if stock else "",
+                "market": stock.market if stock else "CN",
+                "trigger_time": _format_datetime(h.trigger_time),
+                "snapshot": h.trigger_snapshot or {},
+            }
+        )
+    return out
+
+
 @router.get("/{rule_id}/hits")
 def list_alert_hits(rule_id: int, limit: int = 50, db: Session = Depends(get_db)):
     _ = db.query(PriceAlertRule).filter(PriceAlertRule.id == rule_id).first()

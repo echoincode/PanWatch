@@ -349,10 +349,9 @@ def seed_agents():
     db.close()
 
 
-def seed_data_sources():
-    """初始化预置数据源"""
-    db = SessionLocal()
-    sources = [
+# 预置数据源种子(供 seed_data_sources / reconcile_data_sources 复用)。
+# 只增不删的 upsert 目标;删孤儿的对账逻辑见 reconcile_data_sources。
+DATA_SOURCE_SEEDS: list[dict] = [
         # 新闻类数据源
         {
             "name": "雪球资讯",
@@ -399,29 +398,38 @@ def seed_data_sources():
             "test_symbols": ["601127", "600519", "300750"],
         },
         {
-            "name": "Tushare K线",
+            "name": "东方财富 K线",
             "type": "kline",
-            "provider": "tushare",
-            "config": {
-                "token": "",
-                "description": "Tushare Pro 日线数据,需 pip install tushare 并配 token。仅 A 股。",
-            },
-            "enabled": False,
-            "priority": 10,  # 作为腾讯失败后的备份
+            "provider": "eastmoney",
+            "config": {"description": "东方财富日线,A股/港股长历史兜底(免 key)。"},
+            "enabled": True,
+            "priority": 5,   # 腾讯(0)之后、Tushare(10)之前 → CN/HK 兜底
             "supports_batch": False,
-            "test_symbols": ["600519"],
+            "test_symbols": ["600519", "00700"],
         },
         {
-            "name": "YFinance K线",
+            "name": "Stooq K线",
             "type": "kline",
-            "provider": "yfinance",
-            "config": {
-                "description": "Yahoo Finance,需 pip install yfinance。适用 HK/US,A 股不可用。",
-            },
-            "enabled": False,
-            "priority": 20,
+            "provider": "stooq",
+            "config": {"description": "Stooq 美股日线兜底(免 key)。"},
+            "enabled": True,
+            "priority": 15,  # US 兜底(腾讯 0 之后)
             "supports_batch": False,
             "test_symbols": ["AAPL"],
+        },
+        {
+            "name": "Yahoo K线",
+            "type": "kline",
+            "provider": "yahoo",
+            "config": {
+                "description": "Yahoo chart v8 日线(US/HK,免 key 免 crumb)。国内访问通常需代理,"
+                "在 config.proxy 填写代理地址后启用,作港股 K线第二源/美股更稳兜底。",
+                "proxy": "",
+            },
+            "enabled": False,  # 需代理,默认关(同 YFinance 口径),用户配好 proxy 再开
+            "priority": 20,  # US/HK 最后兜底
+            "supports_batch": False,
+            "test_symbols": ["AAPL", "00700"],
         },
         # 资金流向数据源
         {
@@ -431,6 +439,19 @@ def seed_data_sources():
             "config": {},
             "enabled": True,
             "priority": 0,
+            "supports_batch": False,
+            "test_symbols": ["601127", "600519"],
+        },
+        {
+            "name": "新浪资金流",
+            "type": "capital_flow",
+            "provider": "sina",
+            "config": {
+                "description": "新浪资金流入趋势(CN,免 key)。作东财之后的第二源,"
+                "仅含主力/超大单净额(无大/中/小单细分)。",
+            },
+            "enabled": True,
+            "priority": 5,  # 东财(0)之后的 CN 第二源
             "supports_batch": False,
             "test_symbols": ["601127", "600519"],
         },
@@ -444,6 +465,26 @@ def seed_data_sources():
             "priority": 0,
             "supports_batch": True,
             "test_symbols": ["601127", "600519", "300750"],
+        },
+        {
+            "name": "东方财富行情",
+            "type": "quote",
+            "provider": "eastmoney",
+            "config": {"description": "东方财富 push2 实时行情(CN,免 key)。作腾讯之后的 A 股第二源。"},
+            "enabled": True,
+            "priority": 3,  # 腾讯(0)之后的 CN 第二源(sina/yfinance 不支持 CN)
+            "supports_batch": False,  # push2 stock/get 单只查询,逐只
+            "test_symbols": ["601127", "600519", "300750"],
+        },
+        {
+            "name": "Sina 行情",
+            "type": "quote",
+            "provider": "sina",
+            "config": {"description": "新浪美股/港股实时行情,免 key 免代理,作腾讯之后的 US/HK 备源。"},
+            "enabled": True,
+            "priority": 5,   # 腾讯(0)之后
+            "supports_batch": True,
+            "test_symbols": ["AAPL", "00700"],
         },
         {
             "name": "YFinance 行情",
@@ -467,6 +508,116 @@ def seed_data_sources():
             "priority": 0,
             "supports_batch": True,
             "test_symbols": ["601127", "600519"],
+        },
+        # 快讯数据源（7×24 电报，市场级，不按 symbols 过滤）
+        {
+            "name": "财联社快讯",
+            "type": "flash_news",
+            "provider": "cls",
+            "config": {"description": "财联社 7×24 电报(免 key,本地签名)。"},
+            "enabled": True,
+            "priority": 0,
+            "supports_batch": False,
+            "test_symbols": [],
+        },
+        {
+            "name": "新浪7x24快讯",
+            "type": "flash_news",
+            "provider": "sina",
+            "config": {"description": "新浪财经 7×24 直播,带关联个股。"},
+            "enabled": True,
+            "priority": 5,
+            "supports_batch": False,
+            "test_symbols": [],
+        },
+        {
+            "name": "东方财富7x24快讯",
+            "type": "flash_news",
+            "provider": "eastmoney",
+            "config": {"description": "东财 np-weblist 7×24 资讯,与财联社互备。"},
+            "enabled": True,
+            "priority": 10,
+            "supports_batch": False,
+            "test_symbols": [],
+        },
+        # 基本面数据源（按 symbol，估值/股本/财报指标）
+        {
+            "name": "腾讯基本面",
+            "type": "fundamentals",
+            "provider": "tencent",
+            "config": {"description": "腾讯 qt.gtimg 估值快照(CN,免 key):PE/PB/市值。"},
+            "enabled": True,
+            "priority": 0,
+            "supports_batch": True,
+            "test_symbols": ["600519", "000001"],
+        },
+        {
+            "name": "东方财富基本面",
+            "type": "fundamentals",
+            "provider": "eastmoney",
+            "config": {
+                "description": "东财基本面:CN 股本/市值(push2),US/HK 财报指标(GMAININDICATOR)。"
+            },
+            "enabled": True,
+            "priority": 5,
+            "supports_batch": True,
+            "test_symbols": ["600519", "AAPL"],
+        },
+        # 市场资金面数据源（龙虎榜/融资融券/股东户数/分红/北向资金）
+        {
+            "name": "东财龙虎榜",
+            "type": "dragon_tiger",
+            "provider": "eastmoney",
+            "config": {
+                "description": "东财每日龙虎榜(市场级,需配 test_date 测试)。",
+                "test_date": "",
+            },
+            "enabled": True,
+            "priority": 0,
+            "supports_batch": False,
+            "test_symbols": [],
+        },
+        {
+            "name": "东财融资融券",
+            "type": "margin",
+            "provider": "eastmoney",
+            "config": {"description": "东财个股融资融券明细(按 symbol)。"},
+            "enabled": True,
+            "priority": 0,
+            "supports_batch": True,
+            "test_symbols": ["600519", "000001"],
+        },
+        {
+            "name": "东财股东户数",
+            "type": "shareholders",
+            "provider": "eastmoney",
+            "config": {"description": "东财股东户数变化(按 symbol,季度)。"},
+            "enabled": True,
+            "priority": 0,
+            "supports_batch": True,
+            "test_symbols": ["600519", "000001"],
+        },
+        {
+            "name": "东财分红",
+            "type": "dividend",
+            "provider": "eastmoney",
+            "config": {"description": "东财分红送转历史(按 symbol)。"},
+            "enabled": True,
+            "priority": 0,
+            "supports_batch": True,
+            "test_symbols": ["600519", "000001"],
+        },
+        {
+            "name": "同花顺北向资金",
+            "type": "northbound",
+            "provider": "ths",
+            "config": {
+                "description": "同花顺北向资金实时(东财已断供;深股通近期不可靠)。"
+            },
+            "enabled": True,
+            "priority": 0,
+            "supports_batch": False,
+            "test_symbols": [],
         },
         # K线截图数据源
         {
@@ -495,9 +646,24 @@ def seed_data_sources():
             "supports_batch": False,
             "test_symbols": ["601127"],
         },
-    ]
+]
 
-    for source_data in sources:
+
+def seed_data_sources(db=None) -> list[dict]:
+    """初始化预置数据源(按 name+provider 只增不删的 upsert)。
+
+    db 为 None 时自建独立 session 并自行 commit/close(兼容旧调用方式);
+    传入 db 时复用调用方 session,不 commit/close,交由调用方统一处理
+    (供 reconcile_data_sources 在同一事务里接着做删孤儿)。
+
+    返回本次新增(缺失被补齐)的种子记录摘要列表 [{"name","type","provider"}, ...]。
+    """
+    owns_session = db is None
+    if owns_session:
+        db = SessionLocal()
+
+    seeded_missing: list[dict] = []
+    for source_data in DATA_SOURCE_SEEDS:
         existing = (
             db.query(DataSource)
             .filter(
@@ -514,9 +680,58 @@ def seed_data_sources():
                 existing.test_symbols = source_data.get("test_symbols", [])
         else:
             db.add(DataSource(**source_data))
+            seeded_missing.append(
+                {
+                    "name": source_data["name"],
+                    "type": source_data["type"],
+                    "provider": source_data["provider"],
+                }
+            )
+
+    if owns_session:
+        db.commit()
+        db.close()
+
+    return seeded_missing
+
+
+def _seed_providers_by_type() -> dict[str, set[str]]:
+    """从 DATA_SOURCE_SEEDS 推导每个 type 当前合法的 provider 集合。"""
+    result: dict[str, set[str]] = {}
+    for source_data in DATA_SOURCE_SEEDS:
+        result.setdefault(source_data["type"], set()).add(source_data["provider"])
+    return result
+
+
+def reconcile_data_sources(db) -> dict:
+    """数据源表温和对账:补缺失默认 + 删孤儿,保留用户有效自定义/凭证。
+
+    孤儿判定: legal(type) = PACKAGE_VENDORS_BY_TYPE.get(type, frozenset()) | seed 内该 type 的 provider 集合;
+    DB 行 (type, provider) 不在 legal(type) 内即孤儿。news/chart 等非引擎类型(包内集合为空)的合法性完全由 seed 决定。
+
+    只删孤儿行,其余行(含用户改过 config/priority/enabled 的自定义行)原样保留。
+    """
+    from marketdata import PACKAGE_VENDORS_BY_TYPE
+
+    seeded_missing = seed_data_sources(db)
+    seed_providers_by_type = _seed_providers_by_type()
+
+    deleted: list[dict] = []
+    for row in db.query(DataSource).all():
+        legal = PACKAGE_VENDORS_BY_TYPE.get(row.type, frozenset()) | seed_providers_by_type.get(row.type, set())
+        if row.provider not in legal:
+            deleted.append(
+                {"id": row.id, "type": row.type, "provider": row.provider, "name": row.name}
+            )
+            db.delete(row)
+
+    if seeded_missing:
+        logger.info(f"数据源对账: 补齐缺失默认 {len(seeded_missing)} 条: {seeded_missing}")
+    if deleted:
+        logger.info(f"数据源对账: 删除孤儿数据源 {len(deleted)} 条: {deleted}")
 
     db.commit()
-    db.close()
+    return {"deleted": deleted, "seeded_missing": seeded_missing}
 
 
 def seed_strategies():
@@ -1220,7 +1435,7 @@ async def lifespan(app):
     """应用生命周期: 初始化 + 启动调度器"""
     init_db()
     setup_logging()
-    setup_proxy()  # 必须在 setup_ssl 之前:代理决定走哪条出口,SSL 证书才匹配
+    setup_proxy()  # 设置进程 env 代理(HTTP_PROXY/NO_PROXY);所有 httpx(trust_env=True)据此走代理
     setup_ssl()
     setup_playwright()
 
@@ -1235,7 +1450,14 @@ async def lifespan(app):
         db.close()
 
     seed_agents()
-    seed_data_sources()
+    try:
+        db = SessionLocal()
+        try:
+            reconcile_data_sources(db)
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning(f"数据源对账失败,跳过(不阻断启动): {e}")
     seed_strategies()
     seed_sample_stocks()
 
@@ -1336,11 +1558,15 @@ if os.path.exists(static_dir):
 if __name__ == "__main__":
     print("盯盘侠启动: http://127.0.0.1:8000")
     print("API 文档: http://127.0.0.1:8000/docs")
+    # 生产(Docker `python server.py`)不应开 reload:uvicorn 文件监听会多起一个 reloader
+    # 子进程、浪费资源,且监听 data/ 写入易误触发重启。本地热重载用 `make dev-api`
+    # (uvicorn --reload),或显式设 DEV_RELOAD=1。
+    _dev_reload = os.environ.get("DEV_RELOAD", "").lower() in ("1", "true", "yes")
     uvicorn.run(
         "server:app",
         host="0.0.0.0",
         port=8000,
-        reload=True,
-        reload_dirs=["src", "."],
-        reload_excludes=["data/*", "frontend/*", ".claude/*"],
+        reload=_dev_reload,
+        reload_dirs=["src", "."] if _dev_reload else None,
+        reload_excludes=["data/*", "frontend/*", ".claude/*"] if _dev_reload else None,
     )
