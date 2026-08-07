@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   panwatch:
     # 从本地代码构建镜像（替换从 Docker Hub 拉取）
@@ -14,10 +12,15 @@ services:
       - "0.0.0.0:8001:8000"
     volumes:
       - panwatch_data:/app/data
+      - ./env:/app/.env
     environment:
       - TZ=Asia/Shanghai
       - DATA_DIR=/app/data
       - DOCKER=1
+      # Tushare 筹码注入（从宿主 .env 透传；compose 不会自动加载 .env 到容器内 env）
+      - TUSHARE_TOKEN=${TUSHARE_TOKEN}
+      - TUSHARE_API_URL=${TUSHARE_API_URL}
+      - CYQ_INJECT=${CYQ_INJECT:-1}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
