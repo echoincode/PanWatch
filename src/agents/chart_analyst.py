@@ -193,10 +193,16 @@ class ChartAnalystAgent(BaseAgent):
         else:
             # 调用多模态 AI
             logger.info(f"使用 {len(image_paths)} 张截图进行多模态分析")
+            # 单标的（watchlist 仅 1 只）时注入 CYQ 筹码上下文；批量场景语义不明确，不注入。
+            chat_kwargs: dict = {"images": image_paths}
+            if len(context.watchlist) == 1:
+                stock = context.watchlist[0]
+                chat_kwargs["symbol"] = stock.symbol
+                chat_kwargs["market"] = getattr(stock, "market", None)
             content = await context.ai_client.chat(
                 system_prompt,
                 user_content,
-                images=image_paths,
+                **chat_kwargs,
             )
 
         # 构建标题

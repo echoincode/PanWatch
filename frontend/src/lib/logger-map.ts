@@ -27,6 +27,7 @@ export const LOGGER_MAPPING: Record<string, string> = {
   'src.core.analysis_history': '分析历史',
   'src.core.suggestion_pool': '建议池',
   'src.core.data_collector': '数据采集',
+  'src.core.cyq': 'Tushare筹码',
 
   // Collectors
   'src.collectors.akshare_collector': '行情采集',

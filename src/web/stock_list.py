@@ -57,6 +57,17 @@ EASTMONEY_BJ_PARAMS = {
     "fs": "m:0+t:81",  # 北交所
     "fields": "f12,f14",
 }
+
+# 东方财富 ETF 参数（沪市 m:0+t:53 + 深市 m:1+t:53）
+EASTMONEY_ETF_PARAMS = {
+    "po": "1",
+    "np": "1",
+    "fltt": "2",
+    "invt": "2",
+    "fid": "f12",
+    "fs": "m:0+t:53,m:1+t:53",  # 上海ETF + 深圳ETF
+    "fields": "f12,f14",
+}
 PAGE_SIZE = 100
 
 
@@ -238,6 +249,43 @@ def _fetch_us_from_eastmoney() -> list[dict]:
     return stocks
 
 
+def _fetch_etf_page(client: httpx.Client, page: int) -> list[dict]:
+    """获取东方财富 ETF 列表的单页（沪市 + 深市）"""
+    params = {**EASTMONEY_ETF_PARAMS, "pn": str(page), "pz": str(PAGE_SIZE)}
+    resp = client.get(EASTMONEY_URL, params=params, timeout=30, follow_redirects=True)
+    data = resp.json()
+    diff = data.get("data") or {}
+    items = diff.get("diff") or []
+    return [{"symbol": str(item["f12"]), "name": str(item["f14"]), "market": "CN"} for item in items]
+
+
+def _fetch_etf_from_eastmoney() -> list[dict]:
+    """东方财富 ETF 列表（沪市 + 深市，HTTP 分页并发获取）"""
+    with httpx.Client(follow_redirects=True, headers=HEADERS, timeout=30) as client:
+        params = {**EASTMONEY_ETF_PARAMS, "pn": "1", "pz": str(PAGE_SIZE)}
+        resp = client.get(EASTMONEY_URL, params=params)
+        data = resp.json()
+        root = data.get("data") or {}
+        total = root.get("total", 0)
+        first_items = root.get("diff") or []
+
+        stocks = [{"symbol": str(item["f12"]), "name": str(item["f14"]), "market": "CN"} for item in first_items]
+
+        if total <= PAGE_SIZE:
+            return stocks
+
+        pages_needed = (total + PAGE_SIZE - 1) // PAGE_SIZE
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            futures = {pool.submit(_fetch_etf_page, client, pn): pn for pn in range(2, pages_needed + 1)}
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    stocks.extend(future.result())
+                except Exception as e:
+                    logger.warning(f"东方财富ETF第 {futures[future]} 页获取失败: {e}")
+
+    return stocks
+
+
 def _fetch_from_akshare() -> list[dict]:
     """akshare 数据源（备用，可能有 SSL 问题）"""
     import akshare as ak
@@ -299,6 +347,14 @@ def refresh_stock_list() -> list[dict]:
     except Exception as e:
         logger.warning(f"东方财富获取北交所失败: {e}")
 
+    # ETF: 东方财富（沪市 + 深市），让缓存/离线也能搜到 ETF
+    try:
+        etf_stocks = _fetch_etf_from_eastmoney()
+        stocks.extend(etf_stocks)
+        logger.info(f"东方财富获取 ETF 列表成功: {len(etf_stocks)} 只")
+    except Exception as e:
+        logger.warning(f"东方财富获取 ETF 失败: {e}")
+
     if stocks:
         _save_cache(stocks)
     return stocks
@@ -351,6 +407,15 @@ def _realtime_search(query: str, market: str = "", limit: int = 20) -> list[dict
         security_type = (item.get("SecurityTypeName") or "").strip()
         code_raw = (item.get("Code") or "").strip().upper()
 
+        # 基金/ETF 类标识（含 LOF/QDII/联接等）
+        is_fund = (
+            classify in ("Fund", "ETF", "LOF", "QDII", "FUND")
+            or "ETF" in security_type
+            or "基金" in security_type
+            or "联接" in security_type
+            or "LOF" in security_type
+        )
+
         # 判断市场
         if (
             classify in ("AStock", "BJStock")
@@ -363,6 +428,14 @@ def _realtime_search(query: str, market: str = "", limit: int = 20) -> list[dict
             stock_market = "HK"
         elif classify == "UsStock" or "美" in security_type:
             stock_market = "US"
+        elif is_fund:
+            # 基金/ETF：按名称推断市场，未明确时按 A 股 ETF/基金兜底
+            if "港" in security_type:
+                stock_market = "HK"
+            elif "美" in security_type:
+                stock_market = "US"
+            else:
+                stock_market = "CN"
         else:
             continue  # 跳过其他类型（债券、基金等）
 
@@ -370,9 +443,14 @@ def _realtime_search(query: str, market: str = "", limit: int = 20) -> list[dict
         if market and stock_market != market:
             continue
 
-        # 只保留股票（排除债券等）
+        # 只保留股票（排除债券等）；基金/ETF 不在此过滤
         type_us = item.get("TypeUS", "")
-        if stock_market == "US" and type_us and type_us not in ("1", "2", "3"):  # 1=普通股, 3=ADR/ADS 等；5=ETF 等
+        if (
+            stock_market == "US"
+            and type_us
+            and type_us not in ("1", "2", "3")  # 1=普通股, 3=ADR/ADS 等；5=ETF 等
+            and not is_fund
+        ):
             continue
 
         code = item.get("Code", "")

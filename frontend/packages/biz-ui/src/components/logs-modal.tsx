@@ -70,6 +70,11 @@ const FLOW_PRESETS: Array<{ key: string, label: string, loggers: string[] }> = [
     // 'tradingagents' 子串同时匹配 PanWatch 适配层 (src.agents.tradingagents.*) 和上游 (tradingagents.*)
     loggers: ['tradingagents', 'src.agents.base', 'src.core.scheduler', 'src.core.notifier'],
   },
+  {
+    key: 'tushare',
+    label: 'Tushare数据',
+    loggers: ['src.core.cyq'],
+  },
 ]
 
 function unique(arr: string[]) {

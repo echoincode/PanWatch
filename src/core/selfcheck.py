@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 
 from src.web.database import SessionLocal
@@ -56,6 +57,16 @@ def classify_hint(category: str, error: str | None) -> str:
         if any(k in e for k in ("scheduler", "调度", "stopped", "not running")):
             return "调度器未运行/已停止:重启服务以恢复定时任务。"
         return error or "系统项异常,查看日志。"
+    if category == "tushare":
+        if "tushare 未安装" in e:
+            return "未安装 tushare:执行 `pip install tushare` 后重启服务即可启用筹码注入。"
+        if any(k in e for k in ("token", "api", "auth", "401", "403", "unauthorized", "invalid")):
+            return "Tushare 鉴权失败:检查 .env 中 TUSHARE_TOKEN 是否正确有效(需注册 tushare.pro 并获取 token)。"
+        if any(k in e for k in ("connect", "timeout", "timed out", "proxy", "ssl", "getaddrinfo", "name resolution", "url")):
+            return "Tushare 接口不通:检查 TUSHARE_API_URL 指向的端点是否可达(第三方代理需国内出口),或本机代理拦截需换可信出口。"
+        if "disabled" in e:
+            return "筹码注入已关闭:如需启用筹码查询,将 .env 中 CYQ_INJECT 设为 1。"
+        return error or "Tushare 检查异常,查看日志。"
     return error or "未知错误,查看日志。"
 
 
@@ -208,6 +219,49 @@ async def probe_scheduler() -> dict:
                  error=f"调度器已停止: {', '.join(stopped)}")
 
 
+async def probe_tushare() -> dict:
+    """检查 tushare(筹码注入)依赖:安装 / 开关 / token / 端点可达。
+
+    复用 cyq.py 的可用性与 .env 读取逻辑,不重造;实际 ping 用一次轻量 stock_basic。
+    """
+    from src.core import cyq
+
+    t0 = time.monotonic()
+    latency = lambda: int((time.monotonic() - t0) * 1000)
+
+    # 1) 未安装
+    if not cyq._TUSHARE_AVAILABLE:
+        return _item("tushare", "sys:tushare", "Tushare(筹码)", "fail", latency(),
+                     error="tushare 未安装")
+    # 2) 开关关闭
+    if os.getenv("CYQ_INJECT", "1") == "0":
+        cyq._load_dotenv()
+        return _item("tushare", "sys:tushare", "Tushare(筹码)", "ok", latency(),
+                     note="已禁用(CYQ_INJECT=0),不查询")
+    # 3) token
+    cyq._load_dotenv()
+    token = os.getenv("TUSHARE_TOKEN")
+    if not token:
+        return _item("tushare", "sys:tushare", "Tushare(筹码)", "fail", latency(),
+                     error="未配置 TUSHARE_TOKEN")
+    # 4) 端点可达性(ping)
+    api_url = os.getenv("TUSHARE_API_URL") or cyq._TUSHARE_DEFAULT_URL
+    try:
+        def _ping():
+            import tushare as ts
+            pro = ts.pro_api(token)
+            pro.api_url = api_url
+            # 极轻量调用验证 token 与端点
+            pro.stock_basic(exchange="", list_status="L", fields="ts_code", limit=1)
+
+        await asyncio.to_thread(_ping)
+        return _item("tushare", "sys:tushare", "Tushare(筹码)", _status_for(True, latency()),
+                     latency(), note=f"端点 {api_url} 可达")
+    except Exception as e:
+        return _item("tushare", "sys:tushare", "Tushare(筹码)", "fail", latency(),
+                     error=f"接口调用失败: {e}")
+
+
 async def _guard(coro, fallback: dict) -> dict:
     """给每个 probe 套超时;探测自身已 try/except,这里只兜超时/异常。"""
     try:
@@ -229,6 +283,7 @@ def _enumerate(db, include_system: bool = True) -> list[dict]:
         targets.append({"category": "system", "key": "sys:db", "name": "数据库", "group": None, "_kind": "db"})
         targets.append({"category": "system", "key": "sys:disk", "name": "磁盘空间", "group": None, "_kind": "disk"})
         targets.append({"category": "system", "key": "sys:scheduler", "name": "调度器", "group": None, "_kind": "sched"})
+        targets.append({"category": "tushare", "key": "sys:tushare", "name": "Tushare(筹码)", "group": None, "_kind": "tushare"})
     for src in db.query(DataSource).filter(DataSource.enabled.is_(True)).all():
         targets.append({"category": "datasource", "key": f"ds:{src.id}", "name": src.name,
                         "group": None, "_kind": "ds", "_obj": src})
@@ -257,6 +312,8 @@ def _probe_for(t: dict, notify_send: bool):
         return probe_disk()
     if kind == "sched":
         return probe_scheduler()
+    if kind == "tushare":
+        return probe_tushare()
     if kind == "ds":
         return probe_datasource(t["_obj"])
     if kind == "ai":
