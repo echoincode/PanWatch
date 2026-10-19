@@ -4,6 +4,7 @@
  * 进度走新增的 /api/agents/runs/:trace_id/progress。
  */
 import { fetchAPI, getToken } from './client'
+import { interfaceText } from './locale'
 
 export interface TradingAgentsTriggerResult {
   ok: boolean
@@ -28,14 +29,28 @@ export interface DebateHistory {
 }
 
 export interface DeepAnalysisSuggestion {
-  action: 'buy' | 'hold' | 'sell'
+  action: 'buy' | 'add' | 'reduce' | 'sell' | 'hold' | 'watch' | 'avoid'
   action_label: string
+  /** 上游五档评级；review 表示无法安全解析，需要人工复核而不是普通持有。 */
+  rating_raw?: 'buy' | 'overweight' | 'hold' | 'underweight' | 'sell' | 'review'
+  review_required?: boolean
+  /** 上游 propagate 的原始输出，便于展示与排查映射差异。 */
+  upstream_decision?: string
   signal: string
   reason: string
   should_alert: boolean
   agent_name: string
   agent_label: string
   confidence: number
+}
+
+export interface AnalysisTokenUsage {
+  input_tokens: number
+  output_tokens: number
+  total_tokens: number
+  recorded_calls: number
+  completed_calls: number
+  complete: boolean
 }
 
 export interface DeepAnalysisResult {
@@ -45,8 +60,10 @@ export interface DeepAnalysisResult {
   raw_data: {
     suggestion: DeepAnalysisSuggestion
     cost_usd: number
+    token_usage?: AnalysisTokenUsage | null
     should_alert: boolean
     decision: string
+    upstream_decision?: string
     confidence: number
     debate_history: DebateHistory
     risk_judgment: string
@@ -70,6 +87,8 @@ export interface DeepAnalysisResult {
     }
   }
   timestamp?: string
+  analysis_date?: string
+  generated_at?: string
 }
 
 export interface ProgressStage {
@@ -78,6 +97,19 @@ export interface ProgressStage {
   started_at?: string
   duration_sec?: number
   cost_usd?: number
+}
+
+export interface ProgressDataSource {
+  name: string
+  status: 'pending' | 'running' | 'done' | 'error'
+  error?: string
+}
+
+export interface ProgressActiveOperation {
+  kind: 'llm' | 'tool'
+  name: string
+  /** TradingAgents LangGraph 节点名；旧后端快照可能没有该字段。 */
+  agent?: string
 }
 
 export interface ToolkitHit {
@@ -97,7 +129,10 @@ export interface ProgressResponse {
   started_at?: string | null
   elapsed_sec: number
   total_cost_usd: number
+  token_usage?: AnalysisTokenUsage | null
+  active_operation?: ProgressActiveOperation | null
   stages: ProgressStage[]
+  data_sources?: ProgressDataSource[]
   toolkit_summary?: { hit: number; miss: number; passthrough: number; fallthrough?: number; error: number }
   toolkit_recent?: ToolkitHit[]
   run?: {
@@ -111,25 +146,12 @@ export interface ProgressResponse {
   }
 }
 
-export interface BudgetInfo {
-  used: number
-  remaining: number
-  limit: number
-  exceeded: boolean
-  runs_this_month: number
-  estimate_next_run: {
-    cost_low_usd: number
-    cost_high_usd: number
-    model: string
-  }
-  over_budget_action: 'reject' | 'warn' | 'continue'
-  enabled: boolean
-}
-
 export interface HistoryComparisonItem {
+  review_required?: boolean
+  rating_raw?: string
   trace_id: string
   analysis_date: string
-  action: 'buy' | 'hold' | 'sell'
+  action: 'buy' | 'add' | 'reduce' | 'sell' | 'hold' | 'watch' | 'avoid'
   action_label: string
   confidence: number | null
   cost_usd: number | null
@@ -172,11 +194,6 @@ export const tradingAgentsApi = {
     )
   },
 
-  /** 读取本月预算 + 单次预估成本(用于触发前确认弹窗)。 */
-  getBudget(): Promise<BudgetInfo> {
-    return fetchAPI('/agents/tradingagents/budget')
-  },
-
   /** 把某次深度分析报告导出为 PDF 文件并触发下载(后台直出,不走打印对话框)。 */
   async downloadAnalysisPdf(symbol: string, date: string): Promise<void> {
     const token = getToken()
@@ -185,7 +202,7 @@ export const tradingAgentsApi = {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     })
     if (!resp.ok) {
-      let msg = `导出失败 (${resp.status})`
+      let msg = interfaceText(`导出失败 (${resp.status})`, `Export failed (${resp.status})`)
       try {
         const j = await resp.json()
         msg = (j && (j.message || j.detail)) || msg
@@ -195,7 +212,7 @@ export const tradingAgentsApi = {
       throw new Error(msg)
     }
     const blob = await resp.blob()
-    let filename = `深度分析-${date}.pdf`
+    let filename = interfaceText(`深度分析-${date}.pdf`, `deep-analysis-${date}.pdf`)
     const cd = resp.headers.get('Content-Disposition') || ''
     const m = cd.match(/filename\*=UTF-8''([^;]+)/i)
     if (m) {
@@ -251,7 +268,7 @@ export const tradingAgentsApi = {
       `/agents/tradingagents/latest?stock_symbol=${encodeURIComponent(symbol)}`,
     ).then((item: unknown) => {
       if (!item || typeof item !== 'object') return null
-      const rec = item as { content?: string; title?: string; raw_data?: unknown; analysis_date?: string }
+      const rec = item as { content?: string; title?: string; raw_data?: unknown; analysis_date?: string; created_at?: string; updated_at?: string }
       if (!rec.content) return null
       return {
         agent_name: 'tradingagents',
@@ -259,6 +276,8 @@ export const tradingAgentsApi = {
         content: rec.content || '',
         raw_data: (rec.raw_data || {}) as DeepAnalysisResult['raw_data'],
         timestamp: rec.analysis_date,
+        analysis_date: rec.analysis_date,
+        generated_at: rec.updated_at || rec.created_at,
       }
     })
   },
@@ -268,7 +287,7 @@ export const tradingAgentsApi = {
     const qs = new URLSearchParams({ stock_symbol: symbol, analysis_date: date })
     return fetchAPI(`/agents/tradingagents/analysis?${qs.toString()}`).then((item: unknown) => {
       if (!item || typeof item !== 'object') return null
-      const rec = item as { content?: string; title?: string; raw_data?: unknown; analysis_date?: string }
+      const rec = item as { content?: string; title?: string; raw_data?: unknown; analysis_date?: string; created_at?: string; updated_at?: string }
       if (!rec.content) return null
       return {
         agent_name: 'tradingagents',
@@ -276,6 +295,8 @@ export const tradingAgentsApi = {
         content: rec.content || '',
         raw_data: (rec.raw_data || {}) as DeepAnalysisResult['raw_data'],
         timestamp: rec.analysis_date,
+        analysis_date: rec.analysis_date,
+        generated_at: rec.updated_at || rec.created_at,
       }
     })
   },

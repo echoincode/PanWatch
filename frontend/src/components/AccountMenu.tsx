@@ -1,9 +1,13 @@
 import { useState, useEffect, useRef } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
-import { Moon, Sun, Monitor, Check, LogOut, User, Stethoscope, type LucideIcon } from 'lucide-react'
+import { Moon, Sun, Monitor, Check, LogOut, Stethoscope, Languages, type LucideIcon } from 'lucide-react'
 import { isAuthenticated, logout } from '@panwatch/api'
 import type { ThemeMode } from '@/hooks/use-theme'
 import { useAvatar } from '@/hooks/use-avatar'
+import { useTranslation } from 'react-i18next'
+import { changeLocale, normalizeLocale, type SupportedLocale } from '@/i18n'
+import { useInterfaceLanguage } from '@/i18n/interface-language'
+import { UserAvatar } from '@/components/UserAvatar'
 
 export interface AccountNavItem {
   to: string
@@ -11,10 +15,15 @@ export interface AccountNavItem {
   label: string
 }
 
-const THEME_OPTIONS: { value: ThemeMode; icon: LucideIcon; label: string }[] = [
-  { value: 'light', icon: Sun, label: '亮色' },
-  { value: 'dark', icon: Moon, label: '暗色' },
-  { value: 'system', icon: Monitor, label: '跟随系统' },
+const THEME_OPTIONS: { value: ThemeMode; icon: LucideIcon; labelKey: 'light' | 'dark' | 'system' }[] = [
+  { value: 'light', icon: Sun, labelKey: 'light' },
+  { value: 'dark', icon: Moon, labelKey: 'dark' },
+  { value: 'system', icon: Monitor, labelKey: 'system' },
+]
+
+const LANGUAGE_OPTIONS: { value: SupportedLocale; labelKey: 'simplifiedChinese' | 'english' }[] = [
+  { value: 'zh-CN', labelKey: 'simplifiedChinese' },
+  { value: 'en-US', labelKey: 'english' },
 ]
 
 interface AccountMenuProps {
@@ -40,6 +49,9 @@ export default function AccountMenu({
   onOpenSelfCheck,
   size = 'md',
 }: AccountMenuProps) {
+  const { t, i18n: i18nInstance } = useTranslation('settings')
+  const currentLocale = normalizeLocale(i18nInstance.resolvedLanguage || i18nInstance.language)
+  useInterfaceLanguage()
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement | null>(null)
   const location = useLocation()
@@ -66,7 +78,6 @@ export default function AccountMenu({
   }, [location.pathname])
 
   const avatarSize = size === 'sm' ? 'w-6 h-6' : 'w-7 h-7'
-  const iconSize = size === 'sm' ? 'w-3.5 h-3.5' : 'w-4 h-4'
 
   return (
     <div
@@ -80,20 +91,16 @@ export default function AccountMenu({
         className={`${avatarSize} rounded-full overflow-hidden bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center shadow-sm ring-1 transition-all ${
           open ? 'ring-primary/50' : 'ring-border/40 hover:ring-primary/40'
         }`}
-        title="账户与设置"
-        aria-label="账户与设置"
+        title={t('account.menuTitle')}
+        aria-label={t('account.menuTitle')}
       >
-        {avatar ? (
-          <img src={avatar} alt="头像" className="w-full h-full object-cover" />
-        ) : (
-          <User className={`${iconSize} text-white`} />
-        )}
+        <UserAvatar src={avatar} alt={t('account.avatarAlt')} />
       </button>
 
       {open && (
         // top-full + pt-2:用透明内边距桥接头像与菜单,hover 移入不断开
         <div className="absolute right-0 top-full pt-2 z-50">
-          <div className="w-48 rounded-xl border border-border/60 bg-card/95 backdrop-blur p-1.5 shadow-xl">
+          <div className="w-56 rounded-xl border border-border/60 bg-card/95 backdrop-blur p-1.5 shadow-xl">
           {/* 原“更多”导航 */}
           {navItems.map(({ to, icon: Icon, label }) => {
             const isActive = location.pathname.startsWith(to)
@@ -117,8 +124,8 @@ export default function AccountMenu({
           <div className="my-1 h-px bg-border/50" />
 
           {/* 主题色:亮 / 暗 / 跟随系统 */}
-          <div className="px-2.5 pt-0.5 pb-1 text-[11px] text-muted-foreground">主题</div>
-          {THEME_OPTIONS.map(({ value, icon: Icon, label }) => {
+          <div className="px-2.5 pt-0.5 pb-1 text-[11px] text-muted-foreground">{t('account.themeTitle')}</div>
+          {THEME_OPTIONS.map(({ value, icon: Icon, labelKey }) => {
             const active = mode === value
             return (
               <button
@@ -131,7 +138,28 @@ export default function AccountMenu({
                 }`}
               >
                 <Icon className="w-3.5 h-3.5" />
-                {label}
+                {t(`account.theme.${labelKey}`)}
+                {active && <Check className="w-3.5 h-3.5 ml-auto text-primary" />}
+              </button>
+            )
+          })}
+
+          <div className="my-1 h-px bg-border/50" />
+          <div className="px-2.5 pt-0.5 pb-1 text-[11px] text-muted-foreground">{t('language.title')}</div>
+          {LANGUAGE_OPTIONS.map(({ value, labelKey }) => {
+            const active = currentLocale === value
+            return (
+              <button
+                key={value}
+                onClick={() => void changeLocale(value)}
+                className={`flex w-full items-center gap-2.5 px-2.5 py-2 rounded-lg text-[12px] transition-colors ${
+                  active
+                    ? 'text-foreground bg-accent/40'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-accent/60'
+                }`}
+              >
+                <Languages className="w-3.5 h-3.5" />
+                {t(`language.${labelKey}`)}
                 {active && <Check className="w-3.5 h-3.5 ml-auto text-primary" />}
               </button>
             )
@@ -147,7 +175,7 @@ export default function AccountMenu({
             className="flex w-full items-center gap-2.5 px-2.5 py-2 rounded-lg text-[12px] text-muted-foreground hover:text-foreground hover:bg-accent/60 transition-colors"
           >
             <Stethoscope className="w-3.5 h-3.5" />
-            系统自检
+            {t('account.selfCheck')}
           </button>
 
           {isAuthenticated() && (
@@ -158,7 +186,7 @@ export default function AccountMenu({
                 className="flex w-full items-center gap-2.5 px-2.5 py-2 rounded-lg text-[12px] text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
               >
                 <LogOut className="w-3.5 h-3.5" />
-                退出登录
+                {t('account.signOut')}
               </button>
             </>
           )}

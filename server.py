@@ -1,5 +1,6 @@
 """PanWatch 统一服务入口 - Web 后台 + Agent 调度"""
 
+import asyncio
 import logging
 import os
 import time
@@ -7,8 +8,8 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 
-from src.web.database import init_db, SessionLocal
-from src.web.models import (
+from src.platform.persistence.database import init_db, SessionLocal
+from src.platform.persistence.models import (
     AgentConfig,
     Stock,
     StockAgent,
@@ -18,29 +19,30 @@ from src.web.models import (
     AppSettings,
     DataSource,
 )
-from src.web.log_handler import DBLogHandler
-from src.config import Settings, AppConfig, StockConfig
-from src.models.market import MarketCode
-from src.core.ai_client import AIClient
-from src.core.notifier import NotifierManager
-from src.core.scheduler import AgentScheduler
-from src.core.price_alert_scheduler import PriceAlertScheduler
-from src.core.paper_trading_scheduler import PaperTradingScheduler
-from src.core.context_scheduler import ContextMaintenanceScheduler
-from src.core.agent_runs import record_agent_run
-from src.core.log_context import install_log_record_factory, log_context
-from src.core.agent_catalog import (
+from src.platform.observability.log_handler import DBLogHandler
+from src.platform.runtime.config import Settings, AppConfig, StockConfig
+from src.platform.marketdata.models import MarketCode
+from src.platform.marketdata.javascript_runtime import warmup_javascript_runtime
+from src.platform.ai.ai_client import AIClient
+from src.platform.ai.ai_failover import build_failover_client
+from src.platform.notifications.notifier import NotifierManager
+from src.modules.automation.agent_scheduler import AgentScheduler
+from src.modules.market.price_alert_scheduler import PriceAlertScheduler
+from src.modules.paper_trading.paper_trading_scheduler import PaperTradingScheduler
+from src.modules.research.context_scheduler import ContextMaintenanceScheduler
+from src.modules.automation.agent_runs import record_agent_run
+from src.platform.observability.log_context import install_log_record_factory, log_context
+from src.modules.automation.agent_catalog import (
     AGENT_SEED_SPECS,
     AGENT_KIND_WORKFLOW,
 )
-from src.core.strategy_catalog import ensure_strategy_catalog
-from src.agents.base import AgentContext, PortfolioInfo, AccountInfo, PositionInfo
-from src.agents.daily_report import DailyReportAgent
-from src.agents.news_digest import NewsDigestAgent
-from src.agents.chart_analyst import ChartAnalystAgent
-from src.agents.intraday_monitor import IntradayMonitorAgent
-from src.agents.premarket_outlook import PremarketOutlookAgent
-from src.agents.tradingagents import TradingAgentsAgent
+from src.modules.strategy.strategy_catalog import ensure_strategy_catalog
+from src.modules.automation.base import AgentContext, PortfolioInfo, AccountInfo, PositionInfo
+from src.modules.automation.daily_report import DailyReportAgent
+from src.modules.automation.intraday_monitor import IntradayMonitorAgent
+from src.modules.automation.premarket_outlook import PremarketOutlookAgent
+from src.modules.automation.tradingagents import TradingAgentsAgent
+from src.modules.market.data_collector import DEFAULT_TEST_SYMBOLS
 
 logger = logging.getLogger(__name__)
 
@@ -235,34 +237,21 @@ def setup_playwright():
         logger.info("本地开发环境，使用系统 Playwright")
         return
 
-    # 检查是否已安装
-    if os.path.exists(browser_dir):
-        try:
-            dirs = os.listdir(browser_dir)
-            if any(
-                d.startswith("chromium")
-                for d in dirs
-                if os.path.isdir(os.path.join(browser_dir, d))
-            ):
-                logger.info(f"Playwright 浏览器已就绪: {browser_dir}")
-                return
-        except Exception:
-            pass
-
-    # 首次安装
-    logger.info("首次启动，正在安装 Playwright 浏览器（可能需要几分钟）...")
+    # install 会复用当前版本的缓存，并补齐旧缓存缺少的 headless shell。
+    # 不能仅检查 chromium* 目录：挂载卷中可能只有旧版本或完整浏览器。
+    logger.info("正在检查 Playwright 无头浏览器（首次安装可能需要几分钟）...")
     os.makedirs(browser_dir, exist_ok=True)
 
     try:
         result = subprocess.run(
-            ["playwright", "install", "chromium"],
+            ["playwright", "install", "chromium", "--only-shell"],
             env={**os.environ, "PLAYWRIGHT_BROWSERS_PATH": browser_dir},
             capture_output=True,
             text=True,
             timeout=600,  # 10 分钟超时
         )
         if result.returncode == 0:
-            logger.info("Playwright 浏览器安装完成")
+            logger.info("Playwright 无头浏览器已就绪")
         else:
             logger.error(f"Playwright 安装失败: {result.stderr}")
     except subprocess.TimeoutExpired:
@@ -364,7 +353,7 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "enabled": False,
             "priority": 0,
             "supports_batch": True,
-            "test_symbols": ["601127", "600519"],
+            "test_symbols": list(DEFAULT_TEST_SYMBOLS),
         },
         {
             "name": "东方财富资讯",
@@ -374,7 +363,7 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "enabled": True,
             "priority": 1,
             "supports_batch": False,  # 每只股票单独请求
-            "test_symbols": ["601127", "600519"],
+            "test_symbols": list(DEFAULT_TEST_SYMBOLS),
         },
         {
             "name": "东方财富公告",
@@ -384,7 +373,7 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "enabled": True,
             "priority": 2,
             "supports_batch": True,  # 支持批量查询
-            "test_symbols": ["601127", "600519"],
+            "test_symbols": list(DEFAULT_TEST_SYMBOLS),
         },
         # K线数据源
         {
@@ -395,7 +384,7 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "enabled": True,
             "priority": 0,
             "supports_batch": False,
-            "test_symbols": ["601127", "600519", "300750"],
+            "test_symbols": list(DEFAULT_TEST_SYMBOLS),
         },
         {
             "name": "东方财富 K线",
@@ -405,7 +394,7 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "enabled": True,
             "priority": 5,   # 腾讯(0)之后、Tushare(10)之前 → CN/HK 兜底
             "supports_batch": False,
-            "test_symbols": ["600519", "00700"],
+            "test_symbols": list(DEFAULT_TEST_SYMBOLS),
         },
         {
             "name": "Stooq K线",
@@ -415,7 +404,7 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "enabled": True,
             "priority": 15,  # US 兜底(腾讯 0 之后)
             "supports_batch": False,
-            "test_symbols": ["AAPL"],
+            "test_symbols": list(DEFAULT_TEST_SYMBOLS),
         },
         {
             "name": "Yahoo K线",
@@ -429,7 +418,7 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "enabled": False,  # 需代理,默认关(同 YFinance 口径),用户配好 proxy 再开
             "priority": 20,  # US/HK 最后兜底
             "supports_batch": False,
-            "test_symbols": ["AAPL", "00700"],
+            "test_symbols": list(DEFAULT_TEST_SYMBOLS),
         },
         # 资金流向数据源
         {
@@ -440,7 +429,7 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "enabled": True,
             "priority": 0,
             "supports_batch": False,
-            "test_symbols": ["601127", "600519"],
+            "test_symbols": list(DEFAULT_TEST_SYMBOLS),
         },
         {
             "name": "新浪资金流",
@@ -453,7 +442,7 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "enabled": True,
             "priority": 5,  # 东财(0)之后的 CN 第二源
             "supports_batch": False,
-            "test_symbols": ["601127", "600519"],
+            "test_symbols": list(DEFAULT_TEST_SYMBOLS),
         },
         # 实时行情数据源
         {
@@ -464,7 +453,7 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "enabled": True,
             "priority": 0,
             "supports_batch": True,
-            "test_symbols": ["601127", "600519", "300750"],
+            "test_symbols": list(DEFAULT_TEST_SYMBOLS),
         },
         {
             "name": "东方财富行情",
@@ -474,7 +463,7 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "enabled": True,
             "priority": 3,  # 腾讯(0)之后的 CN 第二源(sina/yfinance 不支持 CN)
             "supports_batch": False,  # push2 stock/get 单只查询,逐只
-            "test_symbols": ["601127", "600519", "300750"],
+            "test_symbols": list(DEFAULT_TEST_SYMBOLS),
         },
         {
             "name": "Sina 行情",
@@ -484,7 +473,7 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "enabled": True,
             "priority": 5,   # 腾讯(0)之后
             "supports_batch": True,
-            "test_symbols": ["AAPL", "00700"],
+            "test_symbols": list(DEFAULT_TEST_SYMBOLS),
         },
         {
             "name": "YFinance 行情",
@@ -496,7 +485,7 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "enabled": False,
             "priority": 10,
             "supports_batch": True,
-            "test_symbols": ["AAPL"],
+            "test_symbols": list(DEFAULT_TEST_SYMBOLS),
         },
         # 事件日历数据源（基于公告结构化）
         {
@@ -507,7 +496,7 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "enabled": True,
             "priority": 0,
             "supports_batch": True,
-            "test_symbols": ["601127", "600519"],
+            "test_symbols": list(DEFAULT_TEST_SYMBOLS),
         },
         # 快讯数据源（7×24 电报，市场级，不按 symbols 过滤）
         {
@@ -549,7 +538,7 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "enabled": True,
             "priority": 0,
             "supports_batch": True,
-            "test_symbols": ["600519", "000001"],
+            "test_symbols": list(DEFAULT_TEST_SYMBOLS),
         },
         {
             "name": "东方财富基本面",
@@ -561,7 +550,7 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "enabled": True,
             "priority": 5,
             "supports_batch": True,
-            "test_symbols": ["600519", "AAPL"],
+            "test_symbols": list(DEFAULT_TEST_SYMBOLS),
         },
         # 市场资金面数据源（龙虎榜/融资融券/股东户数/分红/北向资金）
         {
@@ -585,7 +574,7 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "enabled": True,
             "priority": 0,
             "supports_batch": True,
-            "test_symbols": ["600519", "000001"],
+            "test_symbols": list(DEFAULT_TEST_SYMBOLS),
         },
         {
             "name": "东财股东户数",
@@ -595,7 +584,7 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "enabled": True,
             "priority": 0,
             "supports_batch": True,
-            "test_symbols": ["600519", "000001"],
+            "test_symbols": list(DEFAULT_TEST_SYMBOLS),
         },
         {
             "name": "东财分红",
@@ -605,7 +594,7 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "enabled": True,
             "priority": 0,
             "supports_batch": True,
-            "test_symbols": ["600519", "000001"],
+            "test_symbols": list(DEFAULT_TEST_SYMBOLS),
         },
         {
             "name": "同花顺北向资金",
@@ -631,7 +620,7 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "enabled": True,
             "priority": 0,
             "supports_batch": False,
-            "test_symbols": ["601127"],
+            "test_symbols": list(DEFAULT_TEST_SYMBOLS),
         },
         {
             "name": "东方财富K线截图",
@@ -644,18 +633,19 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "enabled": False,
             "priority": 1,
             "supports_batch": False,
-            "test_symbols": ["601127"],
+            "test_symbols": list(DEFAULT_TEST_SYMBOLS),
         },
 ]
 
 
-def seed_data_sources(db=None) -> list[dict]:
+def seed_data_sources(db=None, *, reset_test_symbols: bool = False) -> list[dict]:
     """初始化预置数据源(按 name+provider 只增不删的 upsert)。
 
     db 为 None 时自建独立 session 并自行 commit/close(兼容旧调用方式);
     传入 db 时复用调用方 session,不 commit/close,交由调用方统一处理
     (供 reconcile_data_sources 在同一事务里接着做删孤儿)。
 
+    reset_test_symbols 仅由“恢复默认”入口传入,用于重置内置源测试股票；普通启动对账不覆盖用户配置。
     返回本次新增(缺失被补齐)的种子记录摘要列表 [{"name","type","provider"}, ...]。
     """
     owns_session = db is None
@@ -673,10 +663,12 @@ def seed_data_sources(db=None) -> list[dict]:
             .first()
         )
         if existing:
-            # 更新已存在记录的新字段（保留用户可能修改的配置）
+            # 恢复默认时只重置测试代码；配置、启用状态、优先级等用户设置仍保留。
             if existing.supports_batch != source_data.get("supports_batch", False):
                 existing.supports_batch = source_data.get("supports_batch", False)
-            if not existing.test_symbols:  # 只在空时更新
+            if reset_test_symbols:
+                existing.test_symbols = list(source_data.get("test_symbols", []))
+            elif not existing.test_symbols:  # 启动对账只补空值,不覆盖用户配置
                 existing.test_symbols = source_data.get("test_symbols", [])
         else:
             db.add(DataSource(**source_data))
@@ -703,17 +695,18 @@ def _seed_providers_by_type() -> dict[str, set[str]]:
     return result
 
 
-def reconcile_data_sources(db) -> dict:
+def reconcile_data_sources(db, *, reset_test_symbols: bool = False) -> dict:
     """数据源表温和对账:补缺失默认 + 删孤儿,保留用户有效自定义/凭证。
 
     孤儿判定: legal(type) = PACKAGE_VENDORS_BY_TYPE.get(type, frozenset()) | seed 内该 type 的 provider 集合;
     DB 行 (type, provider) 不在 legal(type) 内即孤儿。news/chart 等非引擎类型(包内集合为空)的合法性完全由 seed 决定。
 
     只删孤儿行,其余行(含用户改过 config/priority/enabled 的自定义行)原样保留。
+    reset_test_symbols=True 时,仅覆盖内置种子的 test_symbols,供“恢复默认”使用。
     """
     from marketdata import PACKAGE_VENDORS_BY_TYPE
 
-    seeded_missing = seed_data_sources(db)
+    seeded_missing = seed_data_sources(db, reset_test_symbols=reset_test_symbols)
     seed_providers_by_type = _seed_providers_by_type()
 
     deleted: list[dict] = []
@@ -764,6 +757,7 @@ def load_watchlist_for_agent(agent_name: str) -> list[StockConfig]:
                     symbol=s.symbol,
                     name=s.name,
                     market=market,
+                    asset_type=s.asset_type,
                 )
             )
         return result
@@ -773,7 +767,7 @@ def load_watchlist_for_agent(agent_name: str) -> list[StockConfig]:
 
 def load_portfolio_for_agent(agent_name: str) -> PortfolioInfo:
     """从数据库加载某个 Agent 关联股票的持仓信息（包括多账户）"""
-    from src.web.models import Account, Position
+    from src.platform.persistence.models import Account, Position
 
     db = SessionLocal()
     try:
@@ -841,7 +835,7 @@ def load_portfolio_for_agent(agent_name: str) -> PortfolioInfo:
 
 def load_portfolio_for_stock(stock_id: int) -> PortfolioInfo:
     """从数据库加载单只股票的持仓信息"""
-    from src.web.models import Account, Position
+    from src.platform.persistence.models import Account, Position
 
     db = SessionLocal()
     try:
@@ -914,6 +908,16 @@ def _get_app_setting(key: str) -> str:
     try:
         setting = db.query(AppSettings).filter(AppSettings.key == key).first()
         return setting.value if setting and setting.value else ""
+    finally:
+        db.close()
+
+
+def _get_report_language() -> str:
+    from src.platform.language import resolve_report_language
+
+    db = SessionLocal()
+    try:
+        return resolve_report_language(db)
     finally:
         db.close()
 
@@ -1042,7 +1046,7 @@ def _build_notifier(channels: list[NotifyChannel]) -> NotifierManager:
     except Exception:
         retry_backoff_seconds = settings.notify_retry_backoff_seconds
 
-    from src.core.notify_policy import NotifyPolicy, parse_dedupe_overrides
+    from src.platform.notifications.notify_policy import NotifyPolicy, parse_dedupe_overrides
 
     policy = NotifyPolicy(
         timezone=settings.app_timezone,
@@ -1058,25 +1062,13 @@ def _build_notifier(channels: list[NotifyChannel]) -> NotifierManager:
     return notifier
 
 
-def _build_ai_client(
-    model: AIModel | None, service: AIService | None, proxy: str
-) -> AIClient:
-    """根据解析后的 model+service 构建 AIClient"""
-    if model and service:
-        return AIClient(
-            base_url=service.base_url,
-            api_key=service.api_key,
-            model=model.model,
-            proxy=proxy,
-        )
-    # 回退到环境变量配置
-    settings = Settings()
-    return AIClient(
-        base_url=settings.ai_base_url,
-        api_key=settings.ai_api_key,
-        model=settings.ai_model,
-        proxy=proxy,
-    )
+def _build_ai_client(model: AIModel | None, service: AIService | None, proxy: str):
+    """根据解析后的 model+service 构建带 failover 的 AI 客户端。
+
+    主候选沿用四级路由选定的 model+service;备选由 build_failover_client 从库里
+    其余模型按优先级补齐。返回的 FailoverAIClient 与 AIClient 接口兼容,可原地替换。
+    """
+    return build_failover_client(model, service, proxy)
 
 
 def build_context(agent_name: str, stock_agent_id: int | None = None) -> AgentContext:
@@ -1100,6 +1092,7 @@ def build_context(agent_name: str, stock_agent_id: int | None = None) -> AgentCo
         portfolio=portfolio,
         model_label=model_label,
         notify_policy=getattr(notifier, "policy", None),
+        report_language=_get_report_language(),
     )
 
 
@@ -1107,8 +1100,6 @@ def build_context(agent_name: str, stock_agent_id: int | None = None) -> AgentCo
 AGENT_REGISTRY: dict[str, type] = {
     "daily_report": DailyReportAgent,
     "premarket_outlook": PremarketOutlookAgent,
-    "news_digest": NewsDigestAgent,
-    "chart_analyst": ChartAnalystAgent,
     "intraday_monitor": IntradayMonitorAgent,
     "tradingagents": TradingAgentsAgent,
 }
@@ -1137,8 +1128,9 @@ def build_scheduler() -> AgentScheduler:
             if not agent_cls:
                 logger.warning(f"Agent {cfg.name} 未在 AGENT_REGISTRY 中注册")
                 continue
-            if not cfg.schedule:
-                logger.info(f"Agent {cfg.name} 未设置调度计划，跳过")
+            from src.modules.automation.scheduling_policy import schedule_plans
+            plans = schedule_plans(db, cfg)
+            if not plans:
                 continue
 
             agent_kwargs = cfg.config or {}
@@ -1148,15 +1140,36 @@ def build_scheduler() -> AgentScheduler:
                 )
             except TypeError:
                 agent_instance = agent_cls()
-            sched.register(
-                agent_instance,
-                schedule=cfg.schedule,
-                execution_mode=cfg.execution_mode or "batch",
-            )
+            for plan in plans:
+                sched.register(
+                    agent_instance, schedule=plan.schedule,
+                    execution_mode=cfg.execution_mode or "batch",
+                    stock_keys=plan.stock_keys, stock_agent_id=plan.stock_agent_id,
+                )
     finally:
         db.close()
 
     return sched
+
+
+def register_mcp_log_cleanup(sched: AgentScheduler) -> None:
+    """Register MCP audit-log retention on the wrapped APScheduler instance.
+
+    ``AgentScheduler`` owns the concrete APScheduler as ``.scheduler``;
+    keeping this boundary explicit prevents startup code from accidentally
+    calling ``add_job`` on the wrapper itself.
+    """
+    from src.modules.administration.api.mcp import prune_mcp_logs
+
+    sched.scheduler.add_job(
+        prune_mcp_logs,
+        "cron",
+        hour=4,
+        minute=0,
+        id="mcp_log_retention",
+        replace_existing=True,
+    )
+    logger.info("MCP 日志保留期清理任务已注册")
 
 
 def reload_scheduler() -> bool:
@@ -1170,6 +1183,7 @@ def reload_scheduler() -> bool:
             except Exception:
                 pass
         scheduler = build_scheduler()
+        register_mcp_log_cleanup(scheduler)
         scheduler.start()
         logger.info("Agent 调度器已重载")
         return True
@@ -1292,10 +1306,12 @@ async def trigger_agent(agent_name: str) -> str:
                 )
                 return result.content
         except Exception as e:
+            from src.platform.ai.errors import diagnostic_ai_error_message
+
             record_agent_run(
                 agent_name=agent_name,
                 status="failed",
-                error=str(e),
+                error=diagnostic_ai_error_message(e),
                 duration_ms=int((time.monotonic() - start) * 1000),
                 trace_id=trace_id,
                 trigger_source="manual",
@@ -1320,6 +1336,17 @@ async def trigger_agent_for_stock(
     agent_cls = AGENT_REGISTRY.get(agent_name)
     if not agent_cls:
         raise ValueError(f"Agent {agent_name} 未注册实际实现")
+    # 自动调度等不经过 stocks.trigger API 的入口也要拥有同样的生命周期记录；
+    # 手动入口已提前写入，这里幂等调用可避免重复 AgentRun。
+    try:
+        from src.modules.automation.agent_runs import start_agent_run
+        start_agent_run(
+            agent_name=agent_name,
+            trace_id=trace_id,
+            trigger_source="manual",
+        )
+    except Exception as e:
+        logger.warning(f"写 AgentRun running 状态失败,不影响主流程: {e}")
 
     settings = Settings()
     proxy = _get_proxy() or settings.http_proxy
@@ -1333,6 +1360,7 @@ async def trigger_agent_for_stock(
         symbol=stock.symbol,
         name=stock.name,
         market=market,
+        asset_type=getattr(stock, "asset_type", None),
     )
 
     # 加载该股票的持仓信息
@@ -1354,6 +1382,7 @@ async def trigger_agent_for_stock(
         portfolio=portfolio,
         model_label=model_label,
         suppress_notify=suppress_notify,
+        report_language=_get_report_language(),
     )
     # 暴露 trace_id / force_refresh 给 agent(供 TradingAgents 进度反馈 + 缓存控制使用)。
     # AgentContext 不强制声明此字段,通过 setattr 注入,其他 agent 不受影响。
@@ -1399,17 +1428,19 @@ async def trigger_agent_for_stock(
                     or "notify_skipped" in raw
                 ),
                 notify_sent=bool(raw.get("notified", False)),
-                model_label=model_label,
+                model_label=context.model_label,
             )
         except Exception as e:
+            from src.platform.ai.errors import diagnostic_ai_error_message
+
             record_agent_run(
                 agent_name=agent_name,
                 status="failed",
-                error=str(e),
+                error=diagnostic_ai_error_message(e),
                 duration_ms=int((time.monotonic() - start) * 1000),
                 trace_id=trace_id,
                 trigger_source="manual",
-                model_label=model_label,
+                model_label=context.model_label,
             )
             raise
 
@@ -1434,13 +1465,27 @@ async def trigger_agent_for_stock(
 async def lifespan(app):
     """应用生命周期: 初始化 + 启动调度器"""
     init_db()
+    from src.modules.administration.onboarding import recover_interrupted_analysis
+    with SessionLocal() as setup_db:
+        recover_interrupted_analysis(setup_db)
     setup_logging()
+    # OTel 导出(可选,默认关闭):仅当配置了 OTEL_EXPORTER_OTLP_ENDPOINT 且装了
+    # opentelemetry SDK 时启用,否则静默 no-op,不影响现有部署。
+    try:
+        from src.platform.observability.otel import init_otel
+
+        init_otel()
+    except Exception as e:  # 兜底:OTel 初始化异常绝不阻断服务启动
+        logger.warning(f"OTel 初始化跳过: {e}")
     setup_proxy()  # 设置进程 env 代理(HTTP_PROXY/NO_PROXY);所有 httpx(trust_env=True)据此走代理
     setup_ssl()
     setup_playwright()
+    # Complete V8's first isolate initialization before market data workers race
+    # to create their first MiniRacer contexts (native fatal on macOS).
+    warmup_javascript_runtime()
 
     # 从环境变量初始化认证（Docker 部署用）
-    from src.web.api.auth import init_auth_from_env
+    from src.modules.administration.api.auth import init_auth_from_env
 
     db = SessionLocal()
     try:
@@ -1465,14 +1510,14 @@ async def lifespan(app):
     # 早期 TA 运行没写建议池,这次启动一次性补齐,让「AI 建议」面板能看到。
     # 幂等:已存在不重复写;每次启动重跑代价极低(只查最近 7 天 + dedupe)。
     try:
-        from src.agents.tradingagents.backfill import backfill_tradingagents_suggestions
+        from src.modules.automation.tradingagents.operations import backfill_tradingagents_suggestions
         backfill_tradingagents_suggestions(days=7)
     except Exception as e:
         logger.warning(f"TradingAgents 建议回填失败,跳过: {e}")
 
     # 后台刷新股票列表缓存
     import threading
-    from src.web.stock_list import get_stock_list, refresh_stock_list
+    from src.platform.marketdata.stock_list import get_stock_list, refresh_stock_list
 
     def refresh_stock_cache():
         stocks = get_stock_list()
@@ -1481,6 +1526,14 @@ async def lifespan(app):
             refresh_stock_list()
 
     threading.Thread(target=refresh_stock_cache, daemon=True).start()
+
+    # 预热本地近期交易日历,不请求全历史数据;未公布年度不会授权自动交易。
+    try:
+        from src.platform.scheduling.trading_calendar import refresh as refresh_trading_calendar
+
+        asyncio.create_task(refresh_trading_calendar())
+    except Exception as e:
+        logger.warning(f"交易日历预热调度失败: {e}")
 
     global scheduler, price_alert_scheduler, paper_trading_scheduler, context_maintenance_scheduler
     scheduler = build_scheduler()
@@ -1510,7 +1563,8 @@ async def lifespan(app):
         settings = Settings()
         context_maintenance_scheduler = ContextMaintenanceScheduler(
             timezone=settings.app_timezone,
-            eval_interval_hours=6,
+            evaluation_hour=4,
+            evaluation_minute=30,
             snapshot_retention_days=180,
             outcome_retention_days=365,
         )
@@ -1518,23 +1572,33 @@ async def lifespan(app):
         logger.info("上下文维护调度器已启动")
     except Exception as e:
         logger.error(f"上下文维护调度器启动失败: {e}")
-    yield
-    if scheduler:
-        scheduler.shutdown()
-        logger.info("Agent 调度器已关闭")
-    if price_alert_scheduler:
-        price_alert_scheduler.shutdown()
-        logger.info("价格提醒调度器已关闭")
-    if paper_trading_scheduler:
-        paper_trading_scheduler.shutdown()
-        logger.info("模拟盘调度器已关闭")
-    if context_maintenance_scheduler:
-        context_maintenance_scheduler.shutdown()
-        logger.info("上下文维护调度器已关闭")
+    # MCP 调用日志保留期清理:每日 04:00 清理超期审计记录
+    try:
+        register_mcp_log_cleanup(scheduler)
+    except Exception as e:
+        logger.error(f"MCP 日志清理任务注册失败: {e}")
+    try:
+        # Preserve FastAPI's original lifespan, including registered recovery
+        # hooks. Database initialization must precede this context.
+        async with application_lifespan(app):
+            yield
+    finally:
+        if scheduler:
+            scheduler.shutdown()
+            logger.info("Agent 调度器已关闭")
+        if price_alert_scheduler:
+            price_alert_scheduler.shutdown()
+            logger.info("价格提醒调度器已关闭")
+        if paper_trading_scheduler:
+            paper_trading_scheduler.shutdown()
+            logger.info("模拟盘调度器已关闭")
+        if context_maintenance_scheduler:
+            context_maintenance_scheduler.shutdown()
+            logger.info("上下文维护调度器已关闭")
 
 
 # 模块级 app 实例，供 uvicorn reload 使用
-from src.web.app import app  # noqa: E402
+from src.bootstrap.application import app, application_lifespan  # noqa: E402
 
 app.router.lifespan_context = lifespan
 

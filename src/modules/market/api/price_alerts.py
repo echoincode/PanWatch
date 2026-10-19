@@ -1,0 +1,275 @@
+import logging
+from datetime import datetime, time, timedelta, timezone as utc_timezone
+
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from src.platform.runtime.config import Settings
+from src.modules.market import price_alert_service
+from src.modules.market.price_alert_engine import ENGINE
+from src.platform.persistence.database import get_db
+from src.platform.persistence.models import PriceAlertDelivery, PriceAlertHit, PriceAlertRule, Stock
+from src.modules.market.monitoring_health import monitoring_health
+from src.modules.market.alert_delivery import retry_delivery, serialize
+from src.web.errors import api_error
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+
+def _viewer_day_bounds(now: datetime, tzinfo: ZoneInfo) -> tuple[datetime, datetime]:
+    day = now.astimezone(tzinfo).date()
+    # Build each midnight separately: a DST day can contain 23 or 25 hours.
+    start = datetime.combine(day, time.min, tzinfo)
+    end = datetime.combine(day + timedelta(days=1), time.min, tzinfo)
+    return (start.astimezone(utc_timezone.utc).replace(tzinfo=None),
+            end.astimezone(utc_timezone.utc).replace(tzinfo=None))
+
+
+def _format_datetime(dt) -> str:
+    """格式化时间为当前时区的 ISO 格式（naive datetime 视为 UTC）。"""
+    if not dt:
+        return ""
+    tz_name = Settings().app_timezone or "UTC"
+    try:
+        tzinfo = ZoneInfo(tz_name)
+    except Exception:
+        tzinfo = utc_timezone.utc
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=utc_timezone.utc)
+    return dt.astimezone(tzinfo).isoformat()
+
+
+class AlertConditionItem(BaseModel):
+    type: str = Field(..., description="price/change_pct/turnover/volume/volume_ratio")
+    op: str = Field(..., description=">=/<=/>/</==/between")
+    value: float | list[float] = Field(..., description="阈值")
+
+
+class AlertConditionGroup(BaseModel):
+    op: str = Field(default="and", description="and/or")
+    items: list[AlertConditionItem] = Field(default_factory=list)
+
+
+class PriceAlertCreate(BaseModel):
+    stock_id: int
+    name: str = ""
+    enabled: bool = True
+    condition_group: AlertConditionGroup
+    market_hours_mode: str = "trading_only"
+    cooldown_minutes: int = 30
+    max_triggers_per_day: int = 3
+    repeat_mode: str = "repeat"
+    expire_at: str | None = None
+    notify_channel_ids: list[int] = []
+
+
+class PriceAlertUpdate(BaseModel):
+    name: str | None = None
+    enabled: bool | None = None
+    condition_group: AlertConditionGroup | None = None
+    market_hours_mode: str | None = None
+    cooldown_minutes: int | None = None
+    max_triggers_per_day: int | None = None
+    repeat_mode: str | None = None
+    expire_at: str | None = None
+    notify_channel_ids: list[int] | None = None
+
+
+class ToggleBody(BaseModel):
+    enabled: bool
+
+
+def _to_response(rule: PriceAlertRule) -> dict:
+    stock = rule.stock
+    return {
+        "id": rule.id,
+        "stock_id": rule.stock_id,
+        "stock_symbol": stock.symbol if stock else "",
+        "stock_name": stock.name if stock else "",
+        "market": stock.market if stock else "",
+        "name": rule.name,
+        "enabled": rule.enabled,
+        "condition_group": rule.condition_group or {},
+        "market_hours_mode": rule.market_hours_mode,
+        "cooldown_minutes": rule.cooldown_minutes,
+        "max_triggers_per_day": rule.max_triggers_per_day,
+        "repeat_mode": rule.repeat_mode,
+        "expire_at": _format_datetime(rule.expire_at) or None,
+        "notify_channel_ids": rule.notify_channel_ids or [],
+        "last_trigger_at": _format_datetime(rule.last_trigger_at) or None,
+        "last_trigger_price": rule.last_trigger_price,
+        "trigger_count_today": rule.trigger_count_today or 0,
+        "trigger_date": rule.trigger_date or "",
+        "created_at": _format_datetime(rule.created_at),
+        "updated_at": _format_datetime(rule.updated_at),
+    }
+
+
+@router.get("")
+def list_alert_rules(db: Session = Depends(get_db)):
+    rows = price_alert_service.list_alert_rules(db, limit=None)
+    # Preserve the existing list contract; health has a bounded separate view.
+    return [_to_response(r) for r in rows]
+
+
+@router.get("/health")
+def get_monitoring_health(limit: int = 200, db: Session = Depends(get_db)):
+    return monitoring_health(db, limit=max(1, min(limit, 200)))
+
+
+@router.post("/deliveries/{delivery_id}/retry")
+def retry_alert_delivery(delivery_id: int, db: Session = Depends(get_db)):
+    try:
+        return retry_delivery(db, delivery_id)
+    except LookupError as exc:
+        raise api_error(404, "delivery_not_found", "投递记录不存在") from exc
+    except ValueError as exc:
+        raise api_error(409, str(exc), "投递正在进行、已经成功或渠道不可用") from exc
+
+
+@router.post("")
+def create_alert_rule(body: PriceAlertCreate, db: Session = Depends(get_db)):
+    try:
+        row = price_alert_service.create_alert_rule(
+            db,
+            stock_id=body.stock_id,
+            name=body.name,
+            enabled=body.enabled,
+            condition_group=body.condition_group.model_dump(),
+            market_hours_mode=body.market_hours_mode,
+            cooldown_minutes=body.cooldown_minutes,
+            max_triggers_per_day=body.max_triggers_per_day,
+            repeat_mode=body.repeat_mode,
+            expire_at=body.expire_at,
+            notify_channel_ids=body.notify_channel_ids,
+        )
+    except LookupError as exc:
+        raise api_error(404, "price_alert_stock_not_found", "股票不存在") from exc
+    except ValueError as exc:
+        logger.warning("创建价格提醒参数无效: %s", exc)
+        raise api_error(400, "price_alert_invalid", "价格提醒参数无效") from exc
+    return _to_response(row)
+
+
+@router.put("/{rule_id}")
+def update_alert_rule(rule_id: int, body: PriceAlertUpdate, db: Session = Depends(get_db)):
+    updates = body.model_dump(exclude_unset=True)
+    try:
+        row = price_alert_service.update_alert_rule(db, rule_id, updates)
+    except LookupError as exc:
+        raise api_error(404, "price_alert_not_found", "规则不存在") from exc
+    except ValueError as exc:
+        logger.warning("更新价格提醒参数无效: %s", exc)
+        raise api_error(400, "price_alert_invalid", "价格提醒参数无效") from exc
+    return _to_response(row)
+
+
+@router.post("/{rule_id}/toggle")
+def toggle_alert_rule(rule_id: int, body: ToggleBody, db: Session = Depends(get_db)):
+    row = db.query(PriceAlertRule).filter(PriceAlertRule.id == rule_id).first()
+    if not row:
+        raise api_error(404, "price_alert_not_found", "规则不存在")
+    row.enabled = bool(body.enabled)
+    db.commit()
+    db.refresh(row)
+    return _to_response(row)
+
+
+@router.delete("/{rule_id}")
+def delete_alert_rule(rule_id: int, db: Session = Depends(get_db)):
+    try:
+        price_alert_service.delete_alert_rule(db, rule_id)
+    except LookupError as exc:
+        raise api_error(404, "price_alert_not_found", "规则不存在") from exc
+    return {"ok": True}
+
+
+@router.get("/hits/today")
+def list_today_hits(limit: int = 50, timezone: str | None = None, db: Session = Depends(get_db)):
+    """Hits in the viewer's calendar day; omitted timezone preserves legacy clients."""
+    tz_name = timezone if timezone is not None else Settings().app_timezone or "UTC"
+    try:
+        tzinfo = ZoneInfo(tz_name)
+    except (ValueError, ZoneInfoNotFoundError) as exc:
+        raise api_error(400, "timezone_invalid", "时区无效") from exc
+    start_utc, end_utc = _viewer_day_bounds(datetime.now(utc_timezone.utc), tzinfo)
+
+    hits = (
+        db.query(PriceAlertHit)
+        .filter(PriceAlertHit.trigger_time >= start_utc, PriceAlertHit.trigger_time < end_utc)
+        .order_by(PriceAlertHit.trigger_time.desc(), PriceAlertHit.id.desc())
+        .limit(max(1, min(int(limit), 200)))
+        .all()
+    )
+    if not hits:
+        return []
+    rule_map = {r.id: r for r in db.query(PriceAlertRule).all()}
+    stock_ids = {h.stock_id for h in hits}
+    stock_map = {s.id: s for s in db.query(Stock).filter(Stock.id.in_(stock_ids)).all()}
+    out = []
+    for h in hits:
+        stock = stock_map.get(h.stock_id)
+        rule = rule_map.get(h.rule_id)
+        out.append(
+            {
+                "rule_id": h.rule_id,
+                "rule_name": (rule.name if rule else "") or "提醒",
+                "symbol": stock.symbol if stock else "",
+                "name": stock.name if stock else "",
+                "market": stock.market if stock else "CN",
+                "trigger_time": _format_datetime(h.trigger_time),
+                "snapshot": h.trigger_snapshot or {},
+            }
+        )
+    return out
+
+
+@router.get("/{rule_id}/hits")
+def list_alert_hits(rule_id: int, limit: int = 50, db: Session = Depends(get_db)):
+    _ = db.query(PriceAlertRule).filter(PriceAlertRule.id == rule_id).first()
+    rows = (
+        db.query(PriceAlertHit)
+        .filter(PriceAlertHit.rule_id == rule_id)
+        .order_by(PriceAlertHit.trigger_time.desc(), PriceAlertHit.id.desc())
+        .limit(max(1, min(limit, 200)))
+        .all()
+    )
+    return [
+        {
+            "id": r.id,
+            "rule_id": r.rule_id,
+            "stock_id": r.stock_id,
+            "trigger_time": _format_datetime(r.trigger_time),
+            "trigger_snapshot": r.trigger_snapshot or {},
+            "notify_success": bool(r.notify_success),
+            "notify_error": r.notify_error or "",
+            "deliveries": [serialize(d) for d in db.query(PriceAlertDelivery).filter_by(hit_id=r.id).order_by(PriceAlertDelivery.id).all()],
+        }
+        for r in rows
+    ]
+
+
+@router.post("/{rule_id}/test")
+async def test_alert_rule(rule_id: int):
+    result = await ENGINE.scan_once(
+        only_rule_id=rule_id, dry_run=True, bypass_market_hours=True
+    )
+    return result
+
+
+@router.post("/scan")
+async def scan_alert_rules(dry_run: bool = False, bypass_market_hours: bool = True):
+    try:
+        from server import price_alert_scheduler
+    except ImportError:
+        price_alert_scheduler = None
+    if price_alert_scheduler:
+        if bypass_market_hours:
+            return await price_alert_scheduler.trigger_once(dry_run=dry_run)
+        return await ENGINE.scan_once(dry_run=dry_run, bypass_market_hours=False)
+    return await ENGINE.scan_once(
+        dry_run=dry_run, bypass_market_hours=bypass_market_hours
+    )

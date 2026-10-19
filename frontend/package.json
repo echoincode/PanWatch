@@ -3,10 +3,20 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": "24.14.0",
+    "pnpm": "9.15.9"
+  },
   "scripts": {
+    "check:i18n": "node scripts/check-i18n-literals.mjs && node scripts/check-ui-primitives.mjs",
+    "check:market-colors": "node scripts/check-market-colors.mjs",
     "dev": "vite",
-    "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "build": "node scripts/check-ui-primitives.mjs && node scripts/check-timezones.mjs && tsc -b && vite build",
+    "test": "vitest",
+    "preview": "vite preview",
+    "check:ui": "node scripts/check-ui-primitives.mjs",
+    "check:timezones": "node scripts/check-timezones.mjs"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.0.5",
@@ -22,10 +32,12 @@
     "clsx": "^2.1.0",
     "date-fn": "^0.0.2",
     "html-to-image": "^1.11.13",
+    "i18next": "^26.4.2",
     "lucide-react": "^0.300.0",
     "react": "^18.3.0",
     "react-day-picker": "^9.13.2",
     "react-dom": "^18.3.0",
+    "react-i18next": "^17.0.15",
     "react-markdown": "^10.1.0",
     "react-router-dom": "^6.20.0",
     "remark-gfm": "^4.0.1",
@@ -34,13 +46,17 @@
   },
   "devDependencies": {
     "@tailwindcss/typography": "^0.5.19",
+    "@testing-library/react": "^16.3.0",
+    "@testing-library/user-event": "^14.6.1",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.2.0",
     "autoprefixer": "^10.4.16",
+    "jsdom": "^26.1.0",
     "postcss": "^8.4.32",
     "tailwindcss": "^3.4.0",
     "typescript": "^5.3.0",
-    "vite": "^5.0.0"
+    "vite": "^5.0.0",
+    "vitest": "^3.2.4"
   }
 }

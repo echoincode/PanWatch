@@ -1,4 +1,5 @@
 .env
+.env.eval
 __pycache__/
 *.pyc
 .venv/
@@ -23,8 +24,10 @@ pnpm-debug.log*
 
 # Claude
 .claude/
+CLAUDE.md
 *.tsbuildinfo
 
 # 本地设计/计划文档,不入库
 docs/superpowers/
 .superpowers/
+.worktrees/

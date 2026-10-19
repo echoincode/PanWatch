@@ -1,0 +1,430 @@
+"""Planning 试点 —— "全面诊断我的持仓"计划驱动编排。
+
+范围刻意小:只覆盖单一场景(全面诊断持仓)。识别到该意图后走计划驱动:
+LLM 生成结构化计划(逐持仓股分析 → 组合风险 → 汇总建议)→ 计划经 SSE `plan` 事件
+推给前端 → 逐步执行(每步复用现有工具/LLM)→ 步骤失败重规划(上限 1 次,超限带失败
+信息直接汇总)。
+
+这是**试点**:验证"计划驱动"相对固定流程的价值,不做过度泛化。编排函数把工具执行器
+(execute_tool)与 SSE 流(stream)作为依赖注入,便于单测全 mock。
+"""
+
+import json
+import logging
+import re
+from datetime import UTC, datetime
+
+from pan_agent import (
+    BeforeModelTurnContext,
+    ExtensionToolContext,
+    ToolExposureDecision,
+    ToolResult,
+    ToolSpec,
+    ToolCall,
+    PermissionMode,
+)
+
+from src.platform.ai.errors import (
+    AIServiceError,
+    as_ai_service_error,
+    safe_ai_error_message,
+)
+from src.platform.language import resolve_report_language
+
+from .tool_metadata import localized_tool_presentation
+
+logger = logging.getLogger(__name__)
+
+# 触发词:显式命中即走计划驱动(简单启发式,试点足够)
+_PLANNING_TRIGGERS = (
+    "全面诊断",
+    "诊断我的持仓",
+    "诊断一下我的持仓",
+    "持仓诊断",
+    "组合诊断",
+    "全面体检",
+    "持仓体检",
+    "全面分析我的持仓",
+    "diagnosemyportfolio",
+    "portfoliodiagnosis",
+)
+
+
+def should_use_planning(content: str) -> bool:
+    """判断用户输入是否命中"全面诊断持仓"场景。"""
+    if not content:
+        return False
+    text = content.lower().replace(" ", "")
+    return any(t in text for t in _PLANNING_TRIGGERS)
+
+
+_PLAN_SYSTEM = (
+    "你是投资组合诊断规划助手。根据用户持仓,产出一个结构化诊断计划。"
+    "只输出 JSON,形如:"
+    '{"steps":[{"title":"分析 贵州茅台(600519)","action":"analyze_stock",'
+    '"params":{"symbol":"600519","market":"CN"}},'
+    '{"title":"组合整体风险","action":"portfolio_risk"}]}。'
+    "action 取值:analyze_stock(逐只持仓,params 带 symbol/market)、portfolio_risk(组合风险)。"
+    "不要包含汇总步骤,汇总由系统自动追加。"
+)
+
+
+def _plan_messages(portfolio_text: str) -> list[dict]:
+    return [
+        {"role": "system", "content": _PLAN_SYSTEM},
+        {"role": "user", "content": f"我的持仓如下,请产出诊断计划:\n{portfolio_text}"},
+    ]
+
+
+def _replan_messages(
+    portfolio_text: str, failed_title: str, error: str
+) -> list[dict]:
+    return [
+        {"role": "system", "content": _PLAN_SYSTEM},
+        {
+            "role": "user",
+            "content": (
+                f"我的持仓:\n{portfolio_text}\n\n"
+                f'上一版计划里的步骤「{failed_title}」执行失败({error}),'
+                "请重新产出一份可执行的诊断计划(跳过或替换失败步骤)。"
+            ),
+        },
+    ]
+
+
+def parse_plan(text: str) -> list[dict] | None:
+    """从 LLM 文本里容错解析计划步骤列表。
+
+    支持:纯 JSON、```json 围栏包裹、前后有解释文字、尾部截断等常见脏输出。
+    解析失败返回 None(交由调用方回退默认计划)。
+    """
+    if not text:
+        return None
+
+    blob = None
+    m = re.search(r"```(?:json)?\s*([\[{].*?[\]}])\s*```", text, re.S)
+    if m:
+        blob = m.group(1)
+    else:
+        candidates = [i for i in (text.find("{"), text.find("[")) if i >= 0]
+        if candidates:
+            blob = text[min(candidates):]
+
+    if not blob:
+        return None
+
+    data = None
+    for attempt in (blob, blob[: max(blob.rfind("]"), blob.rfind("}")) + 1]):
+        try:
+            data = json.loads(attempt)
+            break
+        except Exception:
+            continue
+    if data is None:
+        return None
+
+    if isinstance(data, dict):
+        data = data.get("steps") or data.get("plan")
+    if not isinstance(data, list) or not data:
+        return None
+    return data
+
+
+def build_default_plan(portfolio_text: str) -> list[dict]:
+    """LLM 计划不可用时的降级默认计划(仅做组合风险,汇总由系统追加)。"""
+    return [{"title": "组合整体风险评估", "action": "portfolio_risk"}]
+
+
+def normalize_steps(steps: list[dict], start_id: int = 1) -> list[dict]:
+    """规范化步骤:补 id/title/action/params/status。过滤 summarize(汇总系统自动做)。"""
+    out = []
+    sid = start_id
+    for s in steps:
+        if not isinstance(s, dict):
+            continue
+        action = s.get("action") or "portfolio_risk"
+        if action == "summarize":
+            continue
+        out.append(
+            {
+                "id": sid,
+                "title": s.get("title") or f"步骤 {sid}",
+                "action": action,
+                "params": s.get("params") or {},
+                "status": "pending",
+            }
+        )
+        sid += 1
+    return out
+
+
+def _steps_public(steps: list[dict]) -> list[dict]:
+    return [{"id": s["id"], "title": s["title"], "status": s["status"]} for s in steps]
+
+
+async def _publish_plan(stream, steps: list[dict], status: str, current=None) -> None:
+    data = {"status": status, "steps": _steps_public(steps)}
+    if current is not None:
+        data["current"] = current
+    await stream.publish("plan", data)
+
+
+_STEP_SYSTEM = (
+    "你是资深投研分析师。基于给定数据,给出精炼、有据的分析(150 字内)。"
+    "保留来源时间、市场状态与时效；延迟、过期或时间未知的报价不得称为当前实时价格。"
+    "历史观点仅作历史参考；区分事实与推断，不补造数据或历史估值区间。"
+)
+_SUMMARY_SYSTEM = (
+    "你是资深投资顾问。基于各步骤的分析结果,给出全面的持仓诊断结论:"
+    "整体健康度、主要风险、可执行的调仓建议。分点、精炼、有据。"
+    "保留步骤中的来源时间和数据缺口；延迟报价只称来源报价，历史意见不能改写为当前建议。"
+    "缺少现金、汇率或有效估值时间时明确说明计算边界，不输出伪精确指标。"
+)
+
+
+async def _execute_step(db, ai_client, execute_tool, step: dict, portfolio_text: str) -> str:
+    """执行单个计划步骤,返回该步的分析文本。"""
+    action = step["action"]
+    if action == "analyze_stock":
+        p = step.get("params") or {}
+        symbol = p.get("symbol", "")
+        market = p.get("market", "CN")
+        tech = await execute_tool(db, "get_technical_analysis", {"symbol": symbol, "market": market})
+        sug = await execute_tool(db, "get_stock_suggestions", {"symbol": symbol, "market": market})
+        msgs = [
+            {"role": "system", "content": _STEP_SYSTEM},
+            {
+                "role": "user",
+                "content": f"分析持仓「{step['title']}」。\n技术面:\n{tech}\n\nAI 建议:\n{sug}",
+            },
+        ]
+        return await ai_client.chat_multi(msgs, temperature=0.4)
+
+    # portfolio_risk 及其它未知 action:统一按组合风险处理
+    msgs = [
+        {"role": "system", "content": _STEP_SYSTEM},
+        {"role": "user", "content": f"评估以下持仓组合的整体风险:\n{portfolio_text}"},
+    ]
+    return await ai_client.chat_multi(msgs, temperature=0.4)
+
+
+def _summary_messages(results: list[tuple[str, str]]) -> list[dict]:
+    body = "\n\n".join(f"【{title}】\n{res}" for title, res in results)
+    return [
+        {"role": "system", "content": _SUMMARY_SYSTEM},
+        {"role": "user", "content": f"以下是各步骤的诊断结果,请汇总:\n\n{body}"},
+    ]
+
+
+async def run_portfolio_diagnosis(db, stream, ai_client, execute_tool, *, trace: dict | None = None, summarize_with_model: bool = True) -> str:
+    """计划驱动的"全面诊断持仓"编排,返回最终汇总文本(已通过 SSE 流式推送)。
+
+    Args:
+        db: DB session。
+        stream: SSEStream(需支持 async publish(event, data))。
+        ai_client: AI 客户端(chat_multi / chat_stream)。
+        execute_tool: async (db, name, args) -> str 工具执行器。
+    """
+    await stream.publish("plan", {"status": "planning", "steps": []})
+
+    if trace is not None:
+        trace.update({"current_step": "portfolio", "steps": [], "tools": []})
+    portfolio_text = await execute_tool(db, "get_portfolio", {})
+
+    # 1) 生成计划(失败/解析不了则回退默认计划)
+    steps = None
+    try:
+        raw = await ai_client.chat_multi(_plan_messages(portfolio_text), temperature=0.3)
+        steps = parse_plan(raw)
+    except Exception:
+        logger.warning("生成诊断计划失败,回退默认计划", exc_info=True)
+    if not steps:
+        steps = build_default_plan(portfolio_text)
+    steps = normalize_steps(steps)
+    if not steps:
+        steps = normalize_steps(build_default_plan(portfolio_text))
+
+    await _publish_plan(stream, steps, status="running")
+
+    # 2) 逐步执行,失败重规划(上限 1 次)
+    results: list[tuple[str, str]] = []
+    replanned = False
+    i = 0
+    while i < len(steps):
+        step = steps[i]
+        step["status"] = "running"
+        if trace is not None:
+            trace["current_step"] = str(step["id"])
+            start_index = len(trace["tools"])
+        await _publish_plan(stream, steps, status="running", current=step["id"])
+        try:
+            res = await _execute_step(db, ai_client, execute_tool, step, portfolio_text)
+            step["status"] = "done"
+            results.append((step["title"], res))
+            if trace is not None:
+                calls = trace["tools"][start_index:] if step["action"] == "analyze_stock" else trace["tools"][:1]
+                trace["steps"].append({"id": str(step["id"]), "title": step["title"], "text": res, "status": "completed", "call_ids": [c["call_id"] for c in calls if c["ok"]]})
+        except Exception as e:  # noqa: BLE001
+            if not replanned:
+                replanned = True
+                logger.info("步骤「%s」失败,触发重规划: %s", step["title"], e)
+                safe_error = safe_ai_error_message(e)
+                try:
+                    raw = await ai_client.chat_multi(
+                        _replan_messages(portfolio_text, step["title"], safe_error),
+                        temperature=0.3,
+                    )
+                    new_steps = parse_plan(raw)
+                except Exception:
+                    new_steps = None
+                if new_steps:
+                    steps = steps[:i] + normalize_steps(new_steps, start_id=step["id"])
+                    await _publish_plan(stream, steps, status="running")
+                    continue  # 从当前位置用新计划重试
+            if trace is not None:
+                trace["steps"].append({"id": str(step["id"]), "title": step["title"], "text": safe_ai_error_message(e), "status": "failed", "call_ids": []})
+            # 已重规划过或重规划失败:标记失败,带失败信息继续汇总
+            step["status"] = "failed"
+            results.append((step["title"], f"(该步执行失败:{safe_ai_error_message(e)})"))
+        await _publish_plan(stream, steps, status="running")
+        i += 1
+
+    # The canonical runtime synthesizes the final answer from this tool result.
+    if not summarize_with_model:
+        await _publish_plan(stream, steps, status="done")
+        return "\n\n".join(f"【{title}】\n{text}" for title, text in results)
+
+    # 3) 汇总(流式推 token)
+    summary = ""
+    try:
+        parts: list[str] = []
+        async for kind, payload in ai_client.chat_stream(
+            _summary_messages(results), temperature=0.4
+        ):
+            if kind == "token":
+                parts.append(payload)
+                await stream.publish("token", {"text": payload})
+        summary = "".join(parts)
+    except Exception as e:  # noqa: BLE001 — 流式汇总失败降级为非流式
+        logger.warning("流式汇总失败,降级非流式: %s", e)
+        try:
+            summary = await ai_client.chat_multi(_summary_messages(results), temperature=0.4)
+            await stream.publish("token", {"text": summary})
+        except Exception as fallback_error:
+            raise as_ai_service_error(fallback_error) from fallback_error
+
+    await _publish_plan(stream, steps, status="done")
+    return summary
+
+
+class PortfolioDiagnosisExtension:
+    """Expose the existing portfolio planner through the canonical runtime.
+
+    The planner remains a host-specific orchestration detail, while the
+    runtime sees one read-only virtual tool and durable extension events.
+    """
+
+    name = "portfolio_diagnosis"
+
+    def __init__(self, db, ai_client, execute_tool=None, *, registry=None) -> None:
+        self._db = db
+        self._ai_client = ai_client
+        self._execute_tool = execute_tool
+        self._registry = registry
+
+    def _tool_spec(self) -> ToolSpec:
+        title, description = localized_tool_presentation(
+            "portfolio_diagnosis",
+            "全面诊断持仓",
+            "执行一次全面持仓诊断，按计划分析组合风险和持仓股票，返回有依据的风险与调仓建议。",
+            resolve_report_language(self._db) if self._db is not None else "zh-CN",
+        )
+        return ToolSpec(
+            name="portfolio_diagnosis",
+            title=title,
+            description=description,
+            input_schema={"type": "object", "properties": {}},
+        )
+
+    async def before_model_turn(
+        self, context: BeforeModelTurnContext
+    ) -> ToolExposureDecision | None:
+        latest_user = next(
+            (
+                message.content
+                for message in reversed(context.messages)
+                if message.role == "user" and message.content.strip()
+            ),
+            "",
+        )
+        if not should_use_planning(latest_user):
+            return None
+        if any(
+            message.role == "tool" and message.name == self._tool_spec().name
+            for message in context.messages
+        ):
+            return None
+        return ToolExposureDecision(additional_tools=(self._tool_spec(),))
+
+    async def handle_tool_call(self, context: ExtensionToolContext) -> ToolResult | None:
+        if context.call.name != self._tool_spec().name:
+            return None
+
+        class EventBridge:
+            async def publish(_, event: str, data: dict) -> None:
+                # The planner's token stream is internal to this virtual tool;
+                # the runtime emits the final grounded answer after the result.
+                if event == "plan":
+                    await context.emit_event(event, data)
+
+        trace = {}
+
+        async def execute_with_evidence(db, name, arguments):
+            if self._registry is None:
+                return await self._execute_tool(db, name, arguments)
+            names = {
+                "get_portfolio": ["get_portfolio"],
+                "get_technical_analysis": ["get_stock_quote", "get_kline_summary"],
+                "get_stock_suggestions": ["get_research_history"],
+            }.get(name, [])
+            texts = []
+            for canonical_name in names:
+                if len(trace["tools"]) >= min(context.request.limits.max_tool_calls, 16):
+                    raise ValueError("诊断内部数据调用达到上限；未分析的标的不能生成判断")
+                entry = self._registry.get(canonical_name)
+                call = ToolCall(id=f"{context.call.id}_nested_{len(trace['tools']) + 1}", name=canonical_name, arguments=arguments)
+                if not context.policy.is_tool_visible(context.request, entry.spec):
+                    raise ValueError(f"诊断无法读取被禁用工具 {canonical_name}")
+                decision = await context.policy.decide(context.request, entry.spec, call)
+                if decision.mode is not PermissionMode.ALLOW:
+                    raise ValueError(f"诊断内部读取未获授权: {canonical_name}")
+                result = await self._registry.execute(canonical_name, context.request, arguments)
+                record = {"call_id": call.id, "tool_name": canonical_name, "arguments": arguments,
+                          "step_id": trace["current_step"], **result.model_dump(mode="json")}
+                trace["tools"].append(record)
+                await context.emit_event("diagnosis_tool", record)
+                if not result.ok:
+                    raise ValueError(result.summary)
+                texts.append(json.dumps(result.model_dump(mode="json"), ensure_ascii=False))
+            return "\n".join(texts)
+
+        try:
+            summary = await run_portfolio_diagnosis(
+                self._db,
+                EventBridge(),
+                self._ai_client,
+                execute_with_evidence,
+                trace=trace,
+                summarize_with_model=False,
+            )
+        except AIServiceError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - runtime converts this to a tool failure
+            logger.exception("持仓诊断扩展执行失败")
+            return ToolResult.failure(summary=f"持仓诊断失败：{exc}", error_code="diagnosis_failed")
+        return ToolResult.success(
+            summary=summary or "持仓诊断已完成。",
+            data={"summary": summary, "nested_tools": trace.get("tools", []), "diagnosis_steps": trace.get("steps", []), "evidence_available": self._registry is not None},
+            sources=[{"name": "PanWatch 持仓诊断"}],
+            observed_at=datetime.now(UTC),
+        )

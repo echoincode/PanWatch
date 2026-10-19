@@ -1,0 +1,222 @@
+import logging
+import time
+from typing import Callable
+
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+from src.modules.automation.base import BaseAgent, AgentContext
+from src.platform.ai.errors import diagnostic_ai_error_message
+from src.platform.marketdata.collectors.kline_collector import kline_source
+from src.modules.automation.agent_runs import record_agent_run
+from src.platform.observability.log_context import log_context
+from src.platform.observability import otel
+from src.modules.automation.scheduling_policy import market_allowed, scoped_context
+from src.platform.scheduling.schedule_parser import parse_schedule
+
+logger = logging.getLogger(__name__)
+
+
+class AgentScheduler:
+    """Agent 调度器"""
+
+    def __init__(self, timezone: str = "UTC"):
+        self.scheduler = AsyncIOScheduler()
+        self.agents: dict[str, BaseAgent] = {}
+        self.execution_modes: dict[str, str] = {}
+        self.timezone = timezone
+        # 改为存储 context 构建函数，而非固定 context
+        self.context_builder: Callable[[str], AgentContext] | None = None
+
+    def set_context_builder(self, builder: Callable[[str], AgentContext]):
+        """设置 context 构建函数（每次执行时动态构建）"""
+        self.context_builder = builder
+
+    def register(self, agent: BaseAgent, schedule: str, execution_mode: str = "batch",
+                 stock_keys: tuple[tuple[str, str], ...] | None = None,
+                 stock_agent_id: int | None = None):
+        """
+        注册 Agent 到调度器。
+
+        Args:
+            agent: Agent 实例
+            schedule: 调度表达式
+                - cron 格式: "分 时 日 月 周" (5 部分)
+                - interval 格式: "interval:3m" 或 "interval:30s"
+            execution_mode: 执行模式 batch/single（single 将逐只股票执行 run_single）
+        """
+        self.agents[agent.name] = agent
+        self.execution_modes[agent.name] = execution_mode or "batch"
+
+        # 解析调度表达式
+        # cron 使用 5 段: "分 时 日 月 周"
+        # 其中 day_of_week 的数字按 POSIX cron 语义(1-5=周一到周五)，会在内部做一次归一化。
+        trigger = parse_schedule(schedule, timezone=self.timezone)
+
+        self.scheduler.add_job(
+            self._run_agent,
+            trigger=trigger,
+            args=[agent.name, stock_keys, stock_agent_id],
+            id=f"{agent.name}:stock:{stock_agent_id}" if stock_agent_id else agent.name,
+            name=agent.display_name,
+            replace_existing=True,
+        )
+
+        logger.info(f"注册 Agent: {agent.display_name} (schedule: {schedule})")
+
+    # NOTE: cron/interval 解析逻辑统一放在 src/core/schedule_parser.py
+
+    async def _run_agent(self, agent_name: str, stock_keys=None, stock_agent_id=None):
+        """执行指定 Agent（动态构建 context）"""
+        if not self.context_builder:
+            logger.error("context_builder 未设置")
+            return
+
+        agent = self.agents.get(agent_name)
+        if not agent:
+            logger.error(f"Agent 未找到: {agent_name}")
+            return
+
+        # Registered scopes are known before context construction. Closed markets
+        # must not create model clients, perform collection, or emit failed runs.
+        if stock_keys is not None and not any(market_allowed(agent_name, market) for market, _symbol in stock_keys):
+            logger.debug("[调度] %s 关联市场不满足交易日/时段，跳过", agent_name)
+            return
+
+        start = time.monotonic()
+        trace_id = f"sch-{agent_name}-{int(time.time() * 1000)}"
+        try:
+            # OTel root span(默认关闭时 no-op);与自建 trace 共用同一 trace_id 关联。
+            with otel.agent_run_span(
+                agent_name, trace_id=trace_id, trigger_source="schedule"
+            ), log_context(
+                trace_id=trace_id,
+                run_id=trace_id,
+                agent_name=agent_name,
+                event="agent_run",
+                tags={"trigger_source": "schedule"},
+            ):
+                # 每次执行时动态构建 context（获取最新配置）
+                context = (self.context_builder(agent_name, stock_agent_id)
+                           if stock_agent_id is not None else self.context_builder(agent_name))
+                targets = list(context.watchlist)
+                if stock_keys is not None:
+                    keys = set(stock_keys)
+                    targets = [stock for stock in targets if (stock.market, stock.symbol) in keys]
+                eligible = [stock for stock in targets if market_allowed(agent_name, stock.market)]
+                if not eligible:
+                    logger.debug("[调度] %s 无符合交易日/时段的关联股票，跳过", agent_name)
+                    return
+                context = scoped_context(context, eligible)
+                logger.info(f"[调度] 开始执行 Agent: {agent.display_name}")
+                mode = self.execution_modes.get(agent_name, "batch")
+                if mode == "single" and hasattr(agent, "run_single"):
+                    processed = 0
+                    skipped = len(targets) - len(eligible)
+                    errors: list[str] = []
+                    notify_attempted = False
+                    notify_sent = False
+                    for stock in list(context.watchlist):
+                        # Recheck after preceding symbols may have taken minutes to analyze.
+                        if not market_allowed(agent_name, stock.market):
+                            skipped += 1
+                            continue
+                        try:
+                            with kline_source(f"agent:{agent_name}"):
+                                res = await agent.run_single(context, stock.symbol)  # type: ignore[attr-defined]
+                            raw = (res.raw_data or {}) if res else {}
+                            if res is None or raw.get("skipped"):
+                                skipped += 1
+                                continue
+                            processed += 1
+                            attempted = any(key in raw for key in ("notified", "notify_error", "notify_skipped"))
+                            if attempted:
+                                notify_sent = (notify_sent if notify_attempted else True) and bool(raw.get("notified", False))
+                                notify_attempted = True
+                        except Exception as e:
+                            logger.error(
+                                f"Agent [{agent_name}] 单只执行失败 {stock.symbol}: {e}",
+                                exc_info=True,
+                            )
+                            errors.append(
+                                f"{stock.symbol}: {diagnostic_ai_error_message(e)}"
+                            )
+                    logger.info(
+                        f"[调度] Agent 单只模式执行完成: {agent.display_name}（执行{processed}，跳过{skipped}，共{len(targets)}）"
+                    )
+                    # An idle poll is not a completed report and cannot resolve
+                    # a prior failure episode. Keep its scheduler logs only.
+                    if processed == 0 and not errors:
+                        return
+                    duration_ms = int((time.monotonic() - start) * 1000)
+                    record_agent_run(
+                        agent_name=agent_name,
+                        status="failed" if errors else "success",
+                        result=f"single mode executed {processed}, skipped {skipped}, total {len(targets)}",
+                        error="; ".join(errors),
+                        notify_attempted=notify_attempted,
+                        notify_sent=notify_sent,
+                        duration_ms=duration_ms,
+                        trace_id=trace_id,
+                        trigger_source="schedule",
+                        model_label=context.model_label,
+                    )
+                else:
+                    if agent_name == "intraday_monitor" and not context.watchlist:
+                        logger.info("[调度] 盘中监测无关联股票，跳过执行")
+                        return
+                    with kline_source(f"agent:{agent_name}"):
+                        result = await agent.run(context)
+                    duration_ms = int((time.monotonic() - start) * 1000)
+                    raw = result.raw_data or {}
+                    if raw.get("skipped"):
+                        logger.info(f"[调度] Agent 无分析结果，跳过报告记录: {agent.display_name}")
+                        return
+                    record_agent_run(
+                        agent_name=agent_name,
+                        status="success",
+                        result=result.content or "",
+                        error="",
+                        duration_ms=duration_ms,
+                        trace_id=trace_id,
+                        trigger_source="schedule",
+                        notify_attempted=(
+                            "notified" in raw
+                            or "notify_error" in raw
+                            or "notify_skipped" in raw
+                        ),
+                        notify_sent=bool(raw.get("notified", False)),
+                        model_label=context.model_label,
+                    )
+                logger.info(f"[调度] Agent 执行完成: {agent.display_name}")
+        except Exception as e:
+            logger.error(f"Agent [{agent_name}] 调度执行异常: {e}", exc_info=True)
+            duration_ms = int((time.monotonic() - start) * 1000)
+            record_agent_run(
+                agent_name=agent_name,
+                status="failed",
+                error=diagnostic_ai_error_message(e),
+                duration_ms=duration_ms,
+                trace_id=trace_id,
+                trigger_source="schedule",
+            )
+
+    async def trigger_now(self, agent_name: str):
+        """立即执行某个 Agent（手动触发）"""
+        await self._run_agent(agent_name)
+
+    def start(self):
+        """启动调度器"""
+        self.scheduler.start()
+        from src.platform.scheduling.scheduler_registry import register
+        register("agent", self.scheduler)
+        logger.info(f"调度器已启动，已注册 {len(self.agents)} 个 Agent")
+
+        # 打印所有已注册的任务
+        jobs = self.scheduler.get_jobs()
+        for job in jobs:
+            logger.info(f"  - {job.name}: 下次执行 {job.next_run_time}")
+
+    def shutdown(self):
+        """关闭调度器"""
+        self.scheduler.shutdown()
+        logger.info("调度器已关闭")

@@ -1,0 +1,296 @@
+import type { TranslationShape } from '../../resource-types'
+import { bizUi as zhBizUi } from '../zh-CN/biz-ui'
+
+export const bizUi = {
+  tour: {
+  "title": "Interactive getting started",
+  "welcome": "Follow one continuous tour: add a stock, view quotes, connect AI and generate your first analysis, then optionally configure alerts and notifications. Click highlighted controls directly and pause at any time.",
+  "flow": "Complete workflow",
+  "start": "Start guided tour",
+  "progress": "Step {{current}} of {{total}}",
+  "pause": "Pause tour",
+  "back": "Back",
+  "next": "Next",
+  "skip": "Skip step",
+  "finish": "Finish tour",
+  "verified": "Action completed. You can continue.",
+  "actOnPage": "Use the highlighted controls to complete this step.",
+  "chooseExisting": "Already have stocks? Choose one",
+  "waiting": "Looking for the control on this page…",
+  "leftPage": "You left the current tour page. Your progress is saved.",
+  "return": "Return to this step",
+  "openAnalysis": "Open first analysis",
+  "analysisNotReady": "View a quote and test your default model in Settings first.",
+  "doneTitle": "Tour complete",
+  "doneDescription": "Keep using these pages or reopen the tour from Getting started. You can configure skipped optional steps in Settings at any time.",
+  "doneAction": "Get started",
+  "steps": {
+    "stock": {
+      "title": "Add your first stock",
+      "description": "Click Add stock, search and confirm. You can also choose a stock in your watchlist."
+    },
+    "stockForm": {
+      "title": "Search and confirm",
+      "description": "Enter a symbol or name, choose a search result, then confirm the addition. Saving takes you to quotes."
+    },
+    "stockChoose": {
+      "title": "Choose an existing stock",
+      "description": "Click a watchlist card or name to use it for this tour. Samples are not selected automatically."
+    },
+    "quote": {
+      "title": "Refresh the quote yourself",
+      "description": "Click the highlighted refresh button to retrieve a real quote. Its card is highlighted after success."
+    },
+    "quoteRead": {
+      "title": "Read the stock quote",
+      "description": "Read its price and change, or click the name for details. Check the data time: closed markets may show the last trading day's quote. Click Next to continue."
+    },
+    "ai": {
+      "title": "Connect and test a default model",
+      "description": "Add a provider and model, set a default, then click its test button. An existing default can be tested directly."
+    },
+    "providerForm": {
+      "title": "Enter provider credentials",
+      "description": "Save a name, endpoint and API key, then add a model for the provider."
+    },
+    "modelForm": {
+      "title": "Add a usable model",
+      "description": "Choose a provider and save its model identifier, or add a discovered model. Return to the list, set it as default and test."
+    },
+    "analysis": {
+      "title": "Open your first analysis",
+      "description": "Open this dialog and confirm generation. It uses your tested default model and starts only when you click."
+    },
+    "analysisForm": {
+      "title": "Generate and wait for results",
+      "description": "Click Generate first analysis. This calls your model and uses quota. You can close the dialog and return later."
+    },
+    "analysisRead": {
+      "title": "Read your first analysis",
+      "description": "The saved result includes the model and generation time. Read it, then click Next to try price alerts."
+    },
+    "alert": {
+      "title": "Create a price alert",
+      "description": "Click New alert and choose conditions for your stock. This step is optional and can be skipped."
+    },
+    "alertForm": {
+      "title": "Save an alert rule",
+      "description": "Check the stock, enter a name, price condition and channels, then save. The rule becomes active and monitors your conditions."
+    },
+    "notify": {
+      "title": "Test a notification channel",
+      "description": "Add and enable a channel, then click its paper-plane test button. This sends a real message. You can skip this optional step."
+    },
+    "channelForm": {
+      "title": "Configure a channel",
+      "description": "Choose its type and enter recipient settings. Save and enable it, then click the paper-plane button to test."
+    }
+  }
+},
+  guideCenter: {
+  "title": "Guide center",
+  "description": "Find every walkthrough here, from your first setup to deeper exploration. Each route saves its own progress and can be replayed.",
+  "mainTitle": "Main tour: from a stock to your first AI analysis",
+  "mainBadge": "Starts on first sign-in · Required steps cannot be skipped",
+  "mainDescription": "Add a stock → View quotes → Connect AI → Generate an analysis. Alerts and notifications follow as optional steps. Pause and resume whenever needed.",
+  "moreTitle": "Explore more",
+  "moreDescription": "Follow highlights on the real pages. Exploration progress records instructions you have read; configuration and execution remain your decisions.",
+  "replay": "Explore again",
+  "inProgress": "In progress",
+  "notStarted": "Not started",
+  "trackProgress": "{{done}} of {{total}} steps explored",
+  "explore": "Explore",
+  "understood": "Understood, continue",
+  "finishTrack": "Finish and return",
+  "closeDialog": "Complete your action here, or close the dialog to continue the tour.",
+  "explorationHint": "Try the highlighted controls, then confirm that you understand this step.",
+  "tracks": {
+    "opportunities": {
+      "title": "Discover and evaluate opportunities",
+      "description": "Filter candidates, read their evidence, and review later outcomes.",
+      "steps": {
+        "filters": {
+          "title": "Filter opportunities you care about",
+          "description": "Choose a market, source, strategy or risk, then click Apply. Relax filters if no candidates match. Analysis tasks produce candidates; starting a tour does not create them."
+        },
+        "signals": {
+          "title": "Read a signal before following it",
+          "description": "Open a candidate for stock details. Check data time, evidence, entry range and invalidation before adding it to your watchlist. An empty list means no matching signals; continue to learn about evaluation."
+        },
+        "evaluation": {
+          "title": "Review later outcomes",
+          "description": "Filter historical suggestions and their subsequent performance. Open a row to read the evidence. This page is empty before analyses have run; return after completing the main tour."
+        }
+      }
+    },
+    "paper": {
+      "title": "Explore paper trading",
+      "description": "Learn about simulated capital, allocations, the run switch and position records.",
+      "steps": {
+        "capital": {
+          "title": "Review simulated capital first",
+          "description": "Open Capital configuration to inspect total capital and allocations for China, Hong Kong and US markets. Changes require an explicit Save. This account is separate from your real positions."
+        },
+        "controls": {
+          "title": "Understand the paper trading switch",
+          "description": "This switch controls automatic signal processing. Review allocations before enabling it. Scan processes current signals and may create simulated trades. The tour never enables or scans on your behalf."
+        },
+        "positions": {
+          "title": "Read positions and trade records",
+          "description": "Review simulated positions, profit and sellable quantities. Completed trades become available above after trading. China follows T+1. An empty list is expected before signals or trades exist."
+        }
+      }
+    },
+    "assistant": {
+      "title": "Use the research assistant",
+      "description": "Ask your own question, review tool permissions and follow background work.",
+      "steps": {
+        "composer": {
+          "title": "Ask a specific question",
+          "description": "Enter a symbol, time range and the question you care about, or choose a stock. Sending invokes your model. If no model is configured, finish the AI connection in the main tour first."
+        },
+        "context": {
+          "title": "Review tool permissions",
+          "description": "Open this panel to inspect available tools and permissions. Actions that require approval are presented before execution. Read the requested action before deciding whether to allow it."
+        },
+        "activity": {
+          "title": "Find conversations and ongoing work",
+          "description": "Use this toolbar to return to conversations, start new research or inspect context. After sending, progress and pending approvals appear in the conversation. You can leave and return to ongoing work."
+        }
+      }
+    },
+    "automation": {
+      "title": "Configure daily analysis tasks",
+      "description": "Inspect schedules, stock bindings and history before enabling scheduled work.",
+      "steps": {
+        "schedule": {
+          "title": "Review actual execution times",
+          "description": "Open the execution schedule to inspect its time zone and upcoming runs. Edit and save when needed. Enabled scheduled tasks use the selected model quota."
+        },
+        "binding": {
+          "title": "Choose stocks for a task",
+          "description": "Open stock bindings, then click a stock to toggle its binding. Changes are saved immediately. The first analysis does not bind stocks or enable scheduled tasks."
+        },
+        "history": {
+          "title": "Review run history and results",
+          "description": "Filter runs by task or stock. Open a record for results, model and time. History is empty before tasks run; failed records help diagnose model or data configuration."
+        }
+      }
+    },
+    "datasources": {
+      "title": "Check market and research data",
+      "description": "Find categories, priorities and connection tests when data is missing.",
+      "steps": {
+        "catalog": {
+          "title": "Find sources by data category",
+          "description": "Expand or collapse a category. Quotes, candles, news and fundamentals use their own sources. Higher-priority sources are tried first, with alternatives available after failures."
+        },
+        "config": {
+          "title": "Inspect source configuration",
+          "description": "Expand a category, then open Settings to inspect priority, test symbols and connection parameters. Save credentials for sources that require them. Built-in sources without credentials can also be tested directly."
+        },
+        "test": {
+          "title": "Test and read the result",
+          "description": "Click Play to test an enabled source. Read its data time, count and missing details. A successful request does not guarantee every market or symbol. Close the result dialog to continue."
+        }
+      }
+    }
+  }
+},
+  gettingStarted: {
+  title: 'Getting started', description: 'Start with one symbol and see your first quote and analysis. Your progress is saved automatically.',
+  bannerTitle: 'Put PanWatch to work', bannerDescription: 'Choose a symbol, view its quote, then connect AI and alerts when you need them.',
+  continue: 'Continue setup', start: 'Start setup', later: 'Do this later', resume: 'Resume setup', review: 'Review getting started',
+  progress: '{{done}} / {{total}} required steps completed', loading: 'Loading setup progress…', retry: 'Retry',
+  completed: 'Completed', pending: 'To do', skipped: 'Do later', optional: 'Optional', required: 'Required',
+  quotesGoal: 'Start with quotes', quotesGoalDesc: 'Follow a symbol and see its price without an AI service.',
+  aiGoal: 'Enable AI analysis', aiGoalDesc: 'Connect a model and generate your first analysis.',
+  next: 'Next step', backHome: 'Back to Home', doneTitle: 'Your selected goal is complete', doneDescription: 'You can now check quotes or analyses every day. Continue with alerts and notifications whenever you like.',
+  chooseStock: 'Choose a symbol to follow', existingStocks: 'Choose from your watchlist', stockPlaceholder: 'Choose a symbol',
+  sampleHint: 'You can use an example from the initial watchlist. Selecting it confirms your choice; no position is required.',
+  search: 'Find and add a symbol', searchPlaceholder: 'Enter a name or symbol', market: 'Market', markets: { CN: 'A shares', HK: 'Hong Kong', US: 'United States' },
+  searching: 'Searching…', noResults: 'No matches found. You can add a symbol manually on the Portfolio page.', manageStocks: 'Manage or manually add symbols',
+  addStock: 'Add and select', currentStock: 'Selected: {{name}} ({{symbol}})', selectFirst: 'Choose a symbol before continuing with this step.',
+  fetchQuote: 'View quote', refreshQuote: 'Refresh quote', quoteHint: 'When the market is closed, the latest available quote is shown. Quote time can differ from retrieval time.',
+  source: 'Source: {{value}}', sourceTime: 'Quote time: {{value}}', observedAt: 'Retrieved: {{value}}', unknown: 'Not provided by source',
+  dataSources: 'Check data sources', configureAi: 'Configure AI service', aiHint: 'Add a provider and model, set a default, and test it. Saving a configuration does not verify the connection. Testing makes one model request.',
+  model: 'Default model', modelPlaceholder: 'Choose a model', testModel: 'Test default model', modelVerified: 'The current default model passed its test',
+  configureChanged: 'Changes to the service URL, key, or model require a new test.', runAnalysis: 'Generate first analysis', rerunAnalysis: 'Generate again',
+  analysisHint: 'Run a short analysis with your default model. Your provider may charge for this request. The result covers observations, evidence, points to watch, and data limits.',
+  analysisScope: 'This analysis does not enable schedules, send external notifications, or create paper trades.',
+  analysisRunning: 'Fetching data and generating your analysis. You can leave this page and return to its saved progress.',
+  analysisFailed: 'The analysis did not finish. Correct the configuration and retry.', analysisModel: 'Model: {{value}}', analysisTime: 'Generated: {{value}}',
+  readAnalysis: 'How to read this analysis', readAnalysisHint: 'Check the data behind each observation, then its time and limitations. Conclusions with missing data need further verification.',
+  advanced: 'Explore more', advancedHint: 'Pre-market, intraday, and closing Agents support daily monitoring. TradingAgents performs deeper research with more time and model usage; start it manually when needed.', agents: 'Explore analysis tasks',
+  createAlert: 'Create price alert', alertTitle: 'Set your first price alert', alertHint: 'Choose a condition you care about. A match appears in the in-app notification center. Select a channel for external delivery.',
+  manageAlerts: 'Manage alerts', alertSaved: 'The selected symbol has an enabled alert',
+  configureNotify: 'Configure notifications', notifyHint: 'Notifications are optional. Add a channel and deliberately send a test message. A successful send verifies it.',
+  channel: 'Notification channel', channelPlaceholder: 'Choose an enabled channel', testChannel: 'Send test notification', notifyVerified: 'An enabled channel passed its send test',
+  deliveryHint: 'A successful test means the sender accepted the message. Confirm receipt at the destination. Select this channel in your alert rules for regular delivery.',
+  skippedHint: 'This step is saved for later. You can continue at any time.', doNow: 'Set up now',
+  steps: {
+    stock: { title: 'Follow a symbol', description: 'Choose an existing symbol or add one you follow.' },
+    quote: { title: 'See your first quote', description: 'Check the price, source, and quote time.' },
+    ai: { title: 'Connect and test AI', description: 'Choose a default model and verify its response.' },
+    analysis: { title: 'Complete first analysis', description: 'Generate and read a short analysis.' },
+    alert: { title: 'Set a price alert', description: 'See important conditions in the notification center.' },
+    notify: { title: 'Receive notifications', description: 'Connect a channel and send a test.' },
+  },
+  errors: { load: 'Could not load setup progress. Please retry.', action: 'The action did not finish. Please retry.',
+    interrupted: 'A service restart interrupted the analysis. Your setup is saved; generate it again.', empty: 'The model returned an empty result. Retry or choose another model.' },
+},
+  logsLogger: 'Logger',
+  klineModal: { title: 'Chart: {{symbol}}', fallbackTitle: 'Chart', description: 'Switch between daily, weekly, and monthly charts with MA, volume, and MACD.', noStock: 'No stock selected' },
+  interactiveKline: { loadFailed: 'Failed to load chart', title: 'Candlestick chart', rsi: 'RSI', intervals: { day: 'Daily', week: 'Weekly', month: 'Monthly' }, refresh: 'Refresh', libraryFailed: 'The chart library failed to load, possibly because of network restrictions. Try again later or check your network and proxy.', metrics: { latest: 'Latest', change: 'Change', amplitude: 'Range', range: 'Period high/low', averageVolume: 'Avg. volume' }, hover: { open: 'Open', close: 'Close', high: 'High', low: 'Low', ma5: '5-day MA', ma10: '10-day MA', ma20: '20-day MA', macd: 'MACD', signal: 'Signal', rsi: 'RSI' }, momentum: 'Momentum (MACD{{rsi}})', momentumRsi: ' + RSI', help: 'MACD highlights trend momentum and turning points. RSI indicates overheated or weak conditions—typically above 70 is hot and below 30 is weak.', tenThousand: '{{value}}0K' },
+  addPosition: { title: 'Add-position calculator', emptySuffix: ' (No current position · Initial-entry estimate)', collapse: 'Collapse ▾', expand: 'Expand ▸', byShares: 'By shares', byAmount: 'By amount', shares: 'Shares to add', amount: 'Amount (CNY)', price: 'Purchase price', sharesExample: 'e.g. 200', amountExample: 'e.g. 10000', estimatedShares: '≈ {{shares}} shares{{lots}}', estimatedLots: ' (≈ {{lots}} lots)', afterCost: 'Average cost after adding', initialCost: 'Initial cost', dilution: 'Cost reduction', total: 'Total shares / invested', lotWarning: 'A-shares are generally traded in lots of 100; use a multiple of 100.', inputHint: 'Enter shares or amount and price to calculate automatically', targetCost: 'Target average cost', targetHint: 'Calculate required shares at the purchase price', required: 'Add {{shares}} shares{{lots}}', approximately: 'About CNY {{amount}}', targetInvalid: 'Requires purchase price < target < current cost', evaluating: 'AI evaluating…', evaluate: 'Ask AI whether adding is suitable', aiResult: 'AI conclusion · For reference only', invalidInput: 'Enter valid shares or amount and price first', evalFailed: 'AI evaluation failed', verdicts: { suitable: 'Suitable', cautious: 'Cautious', unsuitable: 'Unsuitable', unknown: 'Unknown' } },
+  onboarding: { welcome: 'Welcome to PanWatch', ready: 'Your watchlist is ready.', samples: 'We added five popular stocks as examples so you can explore live quotes immediately.', liveTitle: 'Live market monitoring', liveDesc: 'Track watchlist prices and quickly spot unusual moves', aiTitle: 'AI-powered analysis', aiDesc: 'Daily reviews, movement suggestions, and technical analysis', notifyTitle: 'Smart notifications', notifyDesc: 'Push alerts through Telegram, WeCom, and other channels', start: 'Get started', skip: 'Skip setup', configureAi: 'Configure AI analysis', configureAiDesc: 'Connect an AI service to unlock intelligent analysis', aiItems: { report: 'Automated after-market reports', suggestion: 'AI suggestions for unusual moves', chart: 'Technical chart analysis' }, aiProviders: 'Supports OpenAI, Zhipu, DeepSeek, and other providers', later: 'Later', configure: 'Configure now', configureNotify: 'Configure notifications', configureNotifyDesc: 'Receive real-time push notifications after setup', notifyItems: { intraday: 'Intraday movement alerts', report: 'AI analysis report delivery', stop: 'Take-profit and stop-loss alerts' }, notifyProviders: 'Supports Telegram, WeCom, and other channels', complete: 'Setup complete', completeDesc: 'You can change these options anytime in Settings.', dashboard: 'Open Dashboard', portfolio: 'Manage watchlist' },
+  logs: { title: 'Logs', autoRefresh: 'Auto refresh', refresh: 'Refresh', clear: 'Clear', clearConfirm: 'Clear all logs?', search: 'Search message / trace_id / logger...', all: 'All', domains: { business: 'Business first', all: 'All', infra: 'Infrastructure' }, flows: { all: 'All flows', premarket: 'Pre-market analysis', daily: 'After-market review', intraday: 'Intraday monitoring', deep: 'Deep analysis' }, records: '{{count}} records', loggerFilter: 'Logger filters', loggerHint: 'Default flows automatically include `src.agents.base` decision logs', filters: 'Filters: {{summary}}', clearFilters: 'Clear filters', empty: 'No logs', emptyHint: 'Logs will appear here automatically when background tasks run', columns: { time: 'Time', level: 'Level', flow: 'Flow', message: 'Message' }, loaded: 'Loaded {{loaded}} / {{total}}', loading: 'Loading...', loadMore: 'Load more', noMore: 'No more logs', summary: { keyword: 'Keyword: {{value}}', level: 'Level: {{value}}', time: 'Time: {{value}}h', domain: 'Scope: {{value}}', flow: 'Flow: {{value}}', loggers: 'Custom loggers: {{count}}', none: 'No additional filters' } },
+  suggestionBadge: { technicalPending: 'No data', review: 'Review required', source: 'Source: ', unknown: 'Unknown', expired: '(Expired)', detailTitle: 'View suggestion details', technicalTitle: 'View technical details', technical: 'Technical indicators', technicalShort: 'Indicators', watch: 'Watch', signal: 'Signal', reason: 'Rationale', aiResponse: 'AI response', promptContext: 'Prompt context', expand: '(expand)', klineAsOf: 'Chart through {{value}}', calculated: 'Calculated {{value}}', agents: { intraday_monitor: 'Intraday monitor', daily_report: 'Daily review', premarket_outlook: 'Pre-market analysis', technical_fallback: 'Technical indicators' } },
+  deepAnalysis: { title: '🧠 Deep analysis · {{name}} ({{symbol}})', description: 'TradingAgents multi-agent decision framework · For research only; not investment advice', stages: { data_collection: 'Data preparation', market_analyst: 'Technical analyst', social_analyst: 'Sentiment analyst', news_analyst: 'News analyst', fundamentals_analyst: 'Fundamentals analyst', bull_bear_debate: 'Bull/bear debate', research_manager: 'Research manager', trader: 'Trader decision', risk_judge: 'Risk review', final_decision: 'PM synthesis' }, errors: { resultMissing: 'The result has not been saved yet. Check AI History shortly.', analysisFailed: 'Analysis failed', triggerFailed: 'Failed to start analysis' }, triggered: 'Started', failedTitle: 'Analysis failed', close: 'Close', retry: 'Retry', idle: { upcoming: 'About to analyze: {{symbol}}', framework: 'Uses four analysts (technical / sentiment / news / fundamentals), bull/bear debate, risk review, and PM synthesis', duration: '⏱ Estimated time: 3–8 minutes', async: 'ℹ️ Runs asynchronously. You may close this dialog; completion is sent through your notification channels.', cancel: 'Cancel', start: 'Start analysis' }, running: { title: 'Analysis in progress...', elapsed: 'Elapsed {{time}}', currentAgent: 'Current agent: ', currentOperation: 'Current operation: ', dataTool: 'Data tool ', preparing: 'Preparing...', background: 'Run in background (notify on completion)' }, data: { title: 'Data preparation details', sources: { quote: 'Quote', klines: 'Candlesticks', capital_flow: 'Capital flow', events: 'Events', financial: 'Financials', technical: 'Technical indicators' }, statuses: { pending: 'Waiting', running: 'Fetching', done: 'Done', error: 'Fallback after failure' } }, toolkit: { title: 'Data-injection diagnostics', subtitle: '(PanWatch data → TradingAgents tools)', passthrough: 'Pass-through', fallback: 'Fallback', error: 'Errors', legendHit: 'uses PanWatch data', legendMiss: 'matched but not implemented by PanWatch', legendPassthrough: 'non-A-share request sent to upstream vendor', legendFallback: 'A-share cache was empty; upstream vendor used', empty: '⚠️ No tool calls yet. TradingAgents may still be preparing.', chars: ' · {{count}} characters', truncated: '... ({{total}} characters total; showing first {{shown}})' }, usage: { total: 'Tokens {{value}}', input: 'Input {{value}}', output: 'Output {{value}}', unavailable: 'Token usage not recorded', partial: 'Partial usage ({{recorded}} / {{total}} calls recorded)' }, done: { analysisDate: 'Report date: {{value}}', generatedAt: 'Generated: {{value}}', dateUnavailable: 'Not recorded', fallbackAction: 'Hold', fallbackAgent: 'TradingAgents deep analysis', cached: 'Cached report: showing a previously generated result; viewing it does not call the model.', rerun: 'Ignore cache and analyze again', confidence: 'Confidence {{value}} / 10', details: 'View details', cost: 'Cost: ${{value}}', disclaimer: 'Generated by an AI multi-agent framework for research only; not investment advice. Investing involves risk; make independent decisions.' } },
+  stockPriceAlert: {
+    conditions: { price: 'Price', change_pct: 'Change %', turnover: 'Turnover', volume: 'Volume', volume_ratio: 'Volume ratio' },
+    messages: { loadFailed: 'Failed to load alerts', stockNotFound: 'Unable to locate this stock', createFailed: 'Unable to create the alert', saved: 'Alert saved', saveFailed: 'Failed to save', toggleFailed: 'Failed to change alert status', deleted: 'Deleted', deleteFailed: 'Failed to delete', deleteConfirm: 'Delete rule “{{name}}”?' },
+    alert: 'Alert', priceAlert: 'Price alerts', title: '{{name}} alerts', summary: '{{market}} · {{enabled}} enabled / {{total}} total', create: 'New alert', loading: 'Loading...', empty: 'No alert rules for this stock', enabled: 'Enabled', paused: 'Paused', disable: 'Disable', enable: 'Enable', or: ' OR ', and: ' AND ', between: 'between', editTitle: 'Edit alert rule', createTitle: 'New alert rule', formDescription: 'Combine price, change, turnover, volume, and volume-ratio conditions with AND / OR.', saveRule: 'Save rule', defaultName: '{{name}} price alert', fallbackName: '{{name}} alert',
+  },
+  kline: {
+    title: 'Candlesticks / technical indicators', period: 'Period: {{value}}', dataAsOf: 'Data through: {{value}}', calculatedAt: 'Calculated: {{value}}', loading: 'Loading...', empty: 'No data', held: 'Held', notHeld: 'Not held', score: 'Score {{value}}', disclaimer: 'Generated from technical-indicator rules only; not investment advice', hoverHint: 'Tip: hover over an indicator badge for details', current: 'Current: {{value}}',
+    statuses: { bullish: 'Bullish alignment', bearish: 'Bearish alignment', mixed: 'Mixed moving averages', goldenCross: 'Golden cross', deathCross: 'Death cross', overbought: 'Overbought', oversold: 'Oversold', strong: 'Strong', weak: 'Weak', volumeUp: 'High volume', volumeDown: 'Low volume', upperBreak: 'Above upper band', lowerBreak: 'Below lower band', positive: 'positive', negative: 'negative', neutral: 'near zero' },
+    actions: { buy: 'Buy', add: 'Add', sell: 'Sell', reduce: 'Reduce', avoid: 'Avoid', hold: 'Hold', watch: 'Watch', alert: 'Alert' },
+    neutralSignal: 'Technically neutral',
+    items: { trendBull: 'Moving averages are bullish; trend is strong', trendBear: 'Moving averages are bearish; trend is weak', trendMixed: 'Moving averages are mixed; the trend is unclear', macdGolden: 'MACD golden cross; short-term momentum is strengthening', macdDeath: 'MACD death cross; short-term momentum is weakening', macdHist: 'MACD histogram is {{status}}', macdPositive: 'The MACD histogram is positive; momentum is bullish', macdNegative: 'The MACD histogram is negative; momentum is bearish', rsiOversold: 'RSI is oversold; a rebound may develop', rsiStrong: 'RSI is strong; buyers have the advantage', rsiOverbought: 'RSI is overbought; watch for a pullback', rsiWeak: 'RSI is weak; short-term pressure remains', rsiNeutral: 'RSI is neutral', kdjGolden: 'KDJ golden cross; short-term strength is improving', kdjDeath: 'KDJ death cross; short-term strength is fading', bollUpper: 'Price broke above the upper Bollinger Band', bollLower: 'Price fell below the lower Bollinger Band', volumeUp: 'Volume expanded; participation increased', volumeDown: 'Volume contracted; momentum is limited', nearSupport: 'Price is near support; stabilization is more likely', nearResistance: 'Price is near resistance; upside may be limited' },
+    tags: { bullish: 'Bullish MAs', bearish: 'Bearish MAs', macdGolden: 'MACD golden cross', macdDeath: 'MACD death cross', rsiOversold: 'RSI oversold', rsiStrong: 'RSI strong', rsiOverbought: 'RSI overbought', rsiWeak: 'RSI weak', kdjGolden: 'KDJ golden cross', kdjDeath: 'KDJ death cross', bollUpper: 'Upper-band breakout', bollLower: 'Lower-band breakdown', volumeUp: 'Volume expansion', volumeDown: 'Volume contraction', nearSupport: 'Near support', nearResistance: 'Near resistance' },
+    indicators: {
+      trend: { title: 'Trend (moving-average alignment)', description: 'The trend label compares MA5, MA10, and MA20. Bullish alignment is stronger, bearish alignment is weaker, and mixed averages rely more on volume and key price levels.' },
+      macd: { title: 'MACD (trend / momentum)', description: 'A DIF cross above DEA is a golden cross; a cross below is a death cross. The histogram reflects bullish or bearish momentum and should be confirmed with trend, price, and volume.' },
+      rsi: { title: 'RSI (relative strength)', description: 'RSI6 measures relative strength over the last six trading days. Above 70 is strong and above 80 overbought; below 30 is weak and below 20 oversold.' },
+      kdj: { title: 'KDJ (turning points / extremes)', description: 'J is the most sensitive line. Golden and death crosses can flag short-term turns, but often whipsaw in ranges, so confirm with trend, price, and volume.' },
+      volume: { title: 'Volume confirmation', description: 'Higher volume can confirm a breakout or rebound. A move on contracting volume may lack momentum.' },
+      boll: { title: 'Bollinger Bands (volatility / deviation)', description: 'Moves above the upper band or below the lower band often occur during trends or extreme volatility. Confirm with volume and whether price holds after a retest.' },
+      pattern: { title: 'Candlestick pattern (local structure)', description: 'A single-candle pattern has limited value. Its location in the trend, proximity to support or resistance, and volume matter more.' },
+      support: { title: 'Support zone', label: 'Support {{value}}', description: 'Price is more likely to stabilize near support. A high-volume breakdown can turn support into resistance. Treat it as a zone, not an exact price.' },
+      resistance: { title: 'Resistance zone', label: 'Resistance {{value}}', description: 'Upside becomes harder near resistance. A high-volume breakout that holds can turn former resistance into support.' },
+    },
+    metrics: { fiveDay: '5d {{value}}%', twentyDay: '20d {{value}}%', amplitude: 'Range {{value}}%' },
+    rules: { title: 'Suggestion / scoring rules', expand: '(expand)', recommendation: 'Suggestion rules by holding status', unheld: 'Not held: score ≥ 3 → buy; score ≤ -2 → avoid; otherwise → watch', held: 'Held: score ≥ 3 → add; score ≥ 1 → hold; score ≤ -3 → sell; score ≤ -1 → reduce; otherwise → watch', scoring: 'Scoring rules (summed; 0 is neutral)', trend: 'Trend: bullish alignment +2; bearish alignment -2', macd: 'MACD: golden cross +2; death cross -2; positive histogram +1; negative histogram -1', rsi: 'RSI: oversold +1; strong +1; overbought -1; weak -1', kdj: 'KDJ: golden cross +1; death cross -1', boll: 'Bollinger Bands: above upper band +1; below lower band -1', volume: 'Volume: expanding +1; contracting -1', levels: 'Levels: close ≤ support × 1.02 → +1; close ≥ resistance × 0.98 → -1' },
+    askAI: 'Ask AI to analyze these indicators',
+  },
+  stockInsight: {
+    description: 'View overview, charts, AI suggestions, news, and analysis history in one place',
+    markets: { CN: 'A-shares', HK: 'Hong Kong', US: 'U.S.' },
+    actions: { generating: 'Generating', image: 'Image', share: 'Share', copy: 'Copy', processing: 'Working...', held: 'Held', unfollow: 'Unfollow', follow: 'Follow', setting: 'Setting...', setAlert: 'Set alert', askAI: 'Ask AI', refresh: 'Refresh', holdingCannotUnfollow: 'A held stock cannot be unfollowed', more: 'More', openDetails: 'Open details ↗' },
+    tabs: { overview: 'Overview', suggestions: 'Suggestions ({{count}})', reports: 'Reports ({{count}})', deep: 'Deep analysis', deepCount: 'Deep analysis (1)', kline: 'Chart', announcements: 'Filings ({{count}})', news: 'News ({{count}})' },
+    autoRefresh: 'Auto refresh', seconds: '{{count}} sec',
+    metrics: { open: 'Open', high: 'High', low: 'Low', volume: 'Volume', turnover: 'Turnover', amplitude: 'Range', turnoverRate: 'Turnover rate', pe: 'P/E', marketCap: 'Market cap' },
+    holding: { title: 'Position', quantity: 'Quantity', cost: 'Average cost', marketValue: 'Market value', pnl: 'Total P&L', empty: 'Not held' },
+    miniKline: { title: 'Mini chart', noSummary: 'No candlestick summary', empty: 'No mini-chart data', open: 'Open interactive candlestick chart' },
+    cards: { aiSuggestions: 'AI suggestions', updating: 'Updating...', core: 'Core view', noDescription: 'No description', action: 'Action: ', rationale: 'Rationale: ', noRationale: 'No additional rationale', source: 'Source: ', recentSuggestions: 'Recent additional suggestions', generatingSuggestion: 'Generating an AI suggestion...', generatingSuggestionWait: 'Generating an AI suggestion (usually 5–15 seconds)...', noSuggestion: 'No AI suggestions', news: 'News', noNews: 'No related news', aiReports: 'AI reports', noReport: 'No reports', reportSummary: 'Report summary', noReportContent: 'No report content' },
+    reports: { premarket: 'Pre-market', afterMarket: 'After market', premarketAgent: 'Pre-market analysis', afterMarketAgent: 'Daily review', context: 'View analysis context', promptStats: 'Prompt statistics', newsDetails: 'Injected news details', contextSnapshot: 'Context snapshot', promptOriginal: 'Original prompt' },
+    suggestions: { showExpired: 'Show expired suggestions', includeExpired: 'Include expired', activeOnly: 'Active only', technicalFallback: 'Showing the technical-indicator fallback', empty: 'No suggestions' },
+    ranges: { hours6: 'Last 6 hours', hours12: 'Last 12 hours', hours24: 'Last 24 hours', hours48: 'Last 48 hours', hours72: 'Last 72 hours', days7: 'Last 7 days', days14: 'Last 14 days', days30: 'Last 30 days', days90: 'Last 90 days', days180: 'Last 180 days' },
+    announcementsEmpty: 'No filings',
+    messages: { loadFailed: 'Failed to load', canvasUnavailable: 'Unable to create the canvas', imageSaved: 'Share image generated and downloaded', imageFailed: 'Failed to generate the image. Try again later.', copied: 'Insight copied', copyFailed: 'Copy failed. Use image sharing instead.', shareCopied: 'System sharing is unavailable, so the content was copied instead.', shareFailed: 'Sharing failed, so the content was copied instead.', shareAndCopyFailed: 'Sharing and copying both failed. Use image sharing instead.', alertSet: 'Alert set and AI analysis submitted', alertFailed: 'Failed to set the alert', holdingCannotUnfollow: 'Remove the position before unfollowing this stock', unfollowed: 'Unfollowed', followed: 'Added to watchlist', operationFailed: 'Operation failed', autoSuggestionFailed: 'Automatic AI suggestion failed. Use “Set alert” to retry.' },
+    share: { title: 'PanWatch Insight', time: 'Time', currentPrice: 'Current price', suggestion: 'Suggestion', signal: 'Signal', reason: 'Rationale', risk: 'Risk', technical: 'Technical', levels: 'Key levels', source: 'Source', trigger: 'Trigger', invalidation: 'Invalidation', support: 'Support', resistance: 'Resistance', disclaimer: 'For reference only; not investment advice' },
+    technical: { neutral: 'Technically neutral', fallbackReason: 'Baseline suggestion generated from candlestick indicators', indicators: 'Technical-indicator suggestion', score: 'Score {{value}}', marketRisk: 'Market volatility risk', none: 'No technical indicators' },
+    deep: { loading: 'Loading deep-analysis report...', empty: 'No deep-analysis report', emptyHint: 'Trigger deep analysis from the portfolio or watchlist page', title: 'TradingAgents deep analysis', confidence: 'Confidence {{value}} / 10', cost: 'Cost: ${{value}}', analysts: 'Four analyst reports', truncated: '... (truncated)', debate: 'Bull/bear debate', judge: 'Research manager decision:', disclaimer: 'Generated by an AI multi-Agent framework for research only; not investment advice.', stages: { market: 'Technical analyst', social: 'Sentiment analyst', news: 'News analyst', fundamentals: 'Fundamentals analyst' }, historyLoading: 'Loading historical comparison...', historyTitle: 'Historical decisions vs actual returns', historyHint: 'Statistics include decisions with a full 20 trading days of follow-up only', hitRate: 'Overall hit rate', buy: 'Buy / Add ({{count}})', sell: 'Sell / Reduce ({{count}})', avg20d: 'Average 20-day return', columns: { date: 'Date', decision: 'Decision', price: 'Analysis price', day1: '1d', day5: '5d', day20: '20d', hit: 'Hit' } },
+  },
+} as const satisfies TranslationShape<typeof zhBizUi>

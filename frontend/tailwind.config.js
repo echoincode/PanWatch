@@ -38,9 +38,10 @@ export default {
           DEFAULT: 'hsl(var(--card))',
           foreground: 'hsl(var(--card-foreground))',
         },
-        stock: {
-          up: '#E53935',
-          down: '#43A047',
+        market: {
+          up: 'hsl(var(--market-up) / <alpha-value>)',
+          down: 'hsl(var(--market-down) / <alpha-value>)',
+          flat: 'hsl(var(--market-flat) / <alpha-value>)',
         },
       },
       borderRadius: {

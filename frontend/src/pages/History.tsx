@@ -1,3 +1,4 @@
+import { useConfirm } from '@panwatch/base-ui/components/ui/confirm-dialog'
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Clock, Trash2, FileText, ArrowLeft } from 'lucide-react'
@@ -8,6 +9,7 @@ import { Badge } from '@panwatch/base-ui/components/ui/badge'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@panwatch/base-ui/components/ui/select'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@panwatch/base-ui/components/ui/dialog'
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
+import { useTranslation } from 'react-i18next'
 
 interface HistoryRecord {
   id: number
@@ -25,20 +27,19 @@ interface HistoryRecord {
   updated_at: string
 }
 
-const AGENT_LABELS: Record<string, string> = {
-  daily_report: '收盘复盘',
-  premarket_outlook: '盘前分析',
-  intraday_monitor: '盘中监测',
-  news_digest: '新闻速递',
-  chart_analyst: '技术分析',
-  tradingagents: 'TradingAgents 深度',
-}
-
 const WORKFLOW_AGENT_KEYS = ['daily_report', 'premarket_outlook', 'intraday_monitor', 'tradingagents']
 const CAPABILITY_AGENT_KEYS = ['news_digest', 'chart_analyst']
 
 export default function HistoryPage() {
   const { toast } = useToast()
+  const { t } = useTranslation('configuration')
+  const confirmAction = useConfirm()
+  const historyT = t as unknown as (key: string, options?: Record<string, unknown>) => string
+  const tr = (key: string, options?: Record<string, unknown>) => historyT(`p4.history.${key}`, options)
+  const agentLabel = (key: string) => {
+    const label = historyT(`p4.history.agents.${key}`)
+    return label === `p4.history.agents.${key}` ? key : label
+  }
   const navigate = useNavigate()
   const [records, setRecords] = useState<HistoryRecord[]>([])
   const [loading, setLoading] = useState(true)
@@ -91,7 +92,7 @@ export default function HistoryPage() {
       const data = await fetchAPI<HistoryRecord[]>(`/history?${params.toString()}`)
       setRecords(data || [])
     } catch (e) {
-      toast(e instanceof Error ? e.message : '加载失败', 'error')
+      toast(e instanceof Error ? e.message : tr('loadFailed'), 'error')
     } finally {
       setLoading(false)
     }
@@ -121,23 +122,23 @@ export default function HistoryPage() {
   }, [records, selectedId])
 
   const deleteRecord = async (id: number) => {
-    if (!confirm('确定删除这条记录吗？')) return
+    if (!(await confirmAction(tr('deleteConfirm'), { destructive: true }))) return
     try {
       await fetchAPI(`/history/${id}`, { method: 'DELETE' })
-      toast('已删除', 'success')
+      toast(tr('deleted'), 'success')
       load()
     } catch (e) {
-      toast(e instanceof Error ? e.message : '删除失败', 'error')
+      toast(e instanceof Error ? e.message : tr('deleteFailed'), 'error')
     }
   }
 
   // 格式化标题（带日期）
   const formatTitle = (record: HistoryRecord) => {
-    const agentLabel = AGENT_LABELS[record.agent_name] || record.agent_name
+    const label = agentLabel(record.agent_name)
     if (record.title) {
       return `${record.analysis_date} ${record.title}`
     }
-    return `${record.analysis_date} ${agentLabel}`
+    return `${record.analysis_date} ${label}`
   }
 
   const selectedRecord = selectedId ? records.find(r => r.id === selectedId) || null : null
@@ -159,40 +160,40 @@ export default function HistoryPage() {
   }
 
   return (
-    <div className="w-full space-y-4 md:space-y-6">
+    <div data-tour="analysis-history" className="w-full space-y-4 md:space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center gap-2 md:gap-3">
           <div className="w-9 h-9 md:w-10 md:h-10 rounded-xl bg-gradient-to-br from-amber-500 to-amber-500/70 flex items-center justify-center shadow-sm">
             <Clock className="w-4 h-4 md:w-5 md:h-5 text-white" />
           </div>
           <div>
-            <h1 className="text-lg md:text-xl font-bold">分析历史</h1>
-            <p className="text-[12px] md:text-[13px] text-muted-foreground">报告式阅读：目录 + 正文</p>
+            <h1 className="text-lg md:text-xl font-bold">{tr('title')}</h1>
+            <p className="text-[12px] md:text-[13px] text-muted-foreground">{tr('subtitle')}</p>
           </div>
           <div className="hidden md:flex px-2.5 py-1 rounded-full bg-background/70 border border-border/50 text-[11px] text-muted-foreground">
-            共 <span className="font-mono text-foreground/90">{records.length}</span> 条
+            {tr('recordCount', { count: records.length })}
           </div>
         </div>
 
         <div className="flex items-center gap-2">
           <Select value={historyKind} onValueChange={(v) => setHistoryKind(v as 'workflow' | 'capability' | 'all')}>
             <SelectTrigger className="w-full sm:w-[150px] h-9">
-              <SelectValue placeholder="历史范围" />
+              <SelectValue placeholder={tr('range')} />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="workflow">主流程</SelectItem>
-              <SelectItem value="capability">能力层</SelectItem>
-              <SelectItem value="all">全部</SelectItem>
+              <SelectItem value="workflow">{tr('workflow')}</SelectItem>
+              <SelectItem value="capability">{tr('capability')}</SelectItem>
+              <SelectItem value="all">{tr('all')}</SelectItem>
             </SelectContent>
           </Select>
           <Select value={selectedAgent} onValueChange={setSelectedAgent}>
             <SelectTrigger className="w-full sm:w-[180px] h-9">
-              <SelectValue placeholder="全部 Agent" />
+              <SelectValue placeholder={tr('allAgents')} />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">全部 Agent</SelectItem>
+              <SelectItem value="all">{tr('allAgents')}</SelectItem>
               {agentOptions.map((key) => (
-                <SelectItem key={key} value={key}>{AGENT_LABELS[key] || key}</SelectItem>
+                <SelectItem key={key} value={key}>{agentLabel(key)}</SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -206,7 +207,7 @@ export default function HistoryPage() {
       ) : records.length === 0 ? (
         <div className="card p-12 text-center">
           <FileText className="w-12 h-12 text-muted-foreground/30 mx-auto mb-3" />
-          <p className="text-muted-foreground">暂无分析记录</p>
+          <p className="text-muted-foreground">{tr('empty')}</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
@@ -217,14 +218,14 @@ export default function HistoryPage() {
                 onClick={() => setMobileView('list')}
                 className={`h-9 rounded-lg text-[12px] font-medium transition-colors ${mobileView === 'list' ? 'bg-primary text-white' : 'bg-accent/30 text-muted-foreground hover:bg-accent/50'}`}
               >
-                目录
+                {tr('toc')}
               </button>
               <button
                 onClick={() => setMobileView('reader')}
                 className={`h-9 rounded-lg text-[12px] font-medium transition-colors ${mobileView === 'reader' ? 'bg-primary text-white' : 'bg-accent/30 text-muted-foreground hover:bg-accent/50'}`}
                 disabled={!selectedRecord}
               >
-                正文
+                {tr('body')}
               </button>
             </div>
           </div>
@@ -232,7 +233,7 @@ export default function HistoryPage() {
           {/* List */}
           <div className={`md:col-span-5 card overflow-hidden ${mobileView === 'reader' ? 'hidden md:block' : ''}`}>
             <div className="px-4 py-3 bg-accent/20 border-b border-border/50 text-[12px] text-muted-foreground">
-              目录（点击查看）
+              {tr('tocHint')}
             </div>
             <div className="max-h-[70vh] md:max-h-[70vh] overflow-y-auto scrollbar divide-y divide-border/50">
               {records.map(r => {
@@ -245,9 +246,9 @@ export default function HistoryPage() {
                   >
                     <div className="flex items-center gap-2">
                       <Badge variant="outline" className="text-[10px] flex-shrink-0">
-                        {AGENT_LABELS[r.agent_name] || r.agent_name}
+                        {agentLabel(r.agent_name)}
                       </Badge>
-                      <span className={`text-[13px] font-medium truncate ${active ? 'text-foreground' : 'text-foreground/90'}`}>{r.title || '分析报告'}</span>
+                      <span className={`text-[13px] font-medium truncate ${active ? 'text-foreground' : 'text-foreground/90'}`}>{r.title || tr('report')}</span>
                     </div>
                     <div className="mt-1 flex items-center justify-between text-[11px] text-muted-foreground">
                       <span className="font-mono">{r.analysis_date}</span>
@@ -273,9 +274,9 @@ export default function HistoryPage() {
                         onClick={() => setMobileView('list')}
                       >
                         <ArrowLeft className="w-4 h-4" />
-                        目录
+                        {tr('toc')}
                       </Button>
-                      <Badge variant="outline" className="text-[10px]">{AGENT_LABELS[selectedRecord.agent_name] || selectedRecord.agent_name}</Badge>
+                      <Badge variant="outline" className="text-[10px]">{agentLabel(selectedRecord.agent_name)}</Badge>
                       <span className="text-[11px] text-muted-foreground font-mono">{formatDateTime(displayTime(selectedRecord))}</span>
                     </div>
                     <div className="mt-1 text-[15px] md:text-[16px] font-semibold text-foreground truncate">
@@ -295,14 +296,14 @@ export default function HistoryPage() {
                         }
                       }}
                     >
-                      查看详情
+                      {tr('viewDetails')}
                     </Button>
                     <Button
                       variant="ghost"
                       size="icon"
                       className="h-9 w-9 hover:text-destructive"
                       onClick={() => deleteRecord(selectedRecord.id)}
-                      title="删除"
+                      title={tr('delete')}
                     >
                       <Trash2 className="w-4 h-4" />
                     </Button>
@@ -314,7 +315,7 @@ export default function HistoryPage() {
                 </div>
               </div>
             ) : (
-              <div className="text-[13px] text-muted-foreground">请选择一条记录</div>
+              <div className="text-[13px] text-muted-foreground">{tr('selectRecord')}</div>
             )}
           </div>
         </div>
@@ -324,11 +325,11 @@ export default function HistoryPage() {
       <Dialog open={!!detailRecord} onOpenChange={open => !open && setDetailRecord(null)}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>{detailRecord ? formatTitle(detailRecord) : '分析详情'}</DialogTitle>
+            <DialogTitle>{detailRecord ? formatTitle(detailRecord) : tr('detail')}</DialogTitle>
             <DialogDescription>
               {detailRecord && (
                 <span className="flex items-center gap-2">
-                  <Badge variant="outline">{AGENT_LABELS[detailRecord.agent_name] || detailRecord.agent_name}</Badge>
+                  <Badge variant="outline">{agentLabel(detailRecord.agent_name)}</Badge>
                 </span>
               )}
             </DialogDescription>
@@ -338,26 +339,26 @@ export default function HistoryPage() {
           </div>
           {detailRecord?.prompt_stats ? (
             <div className="mt-3 rounded-lg border border-border/50 p-3">
-              <div className="text-[12px] font-medium mb-1">Prompt 统计</div>
-              <pre className="text-[11px] text-muted-foreground whitespace-pre-wrap break-words overflow-x-auto">{JSON.stringify(detailRecord.prompt_stats, null, 2)}</pre>
+              <div className="text-[12px] font-medium mb-1">{tr('promptStats')}</div>
+              <pre className="text-[11px] text-muted-foreground whitespace-pre-wrap break-words overflow-x-auto scrollbar">{JSON.stringify(detailRecord.prompt_stats, null, 2)}</pre>
             </div>
           ) : null}
           {detailRecord?.context_payload ? (
             <div className="mt-3 rounded-lg border border-border/50 p-3">
-              <div className="text-[12px] font-medium mb-1">上下文快照</div>
-              <pre className="text-[11px] text-muted-foreground whitespace-pre-wrap break-words overflow-x-auto max-h-[280px] overflow-y-auto">{JSON.stringify(detailRecord.context_payload, null, 2)}</pre>
+              <div className="text-[12px] font-medium mb-1">{tr('contextSnapshot')}</div>
+              <pre className="text-[11px] text-muted-foreground whitespace-pre-wrap break-words overflow-x-auto max-h-[280px] overflow-y-auto scrollbar">{JSON.stringify(detailRecord.context_payload, null, 2)}</pre>
             </div>
           ) : null}
           {detailRecord?.news_debug ? (
             <div className="mt-3 rounded-lg border border-border/50 p-3">
-              <div className="text-[12px] font-medium mb-1">新闻注入明细</div>
-              <pre className="text-[11px] text-muted-foreground whitespace-pre-wrap break-words overflow-x-auto">{JSON.stringify(detailRecord.news_debug, null, 2)}</pre>
+              <div className="text-[12px] font-medium mb-1">{tr('newsDetails')}</div>
+              <pre className="text-[11px] text-muted-foreground whitespace-pre-wrap break-words overflow-x-auto scrollbar">{JSON.stringify(detailRecord.news_debug, null, 2)}</pre>
             </div>
           ) : null}
           {detailRecord?.prompt_context ? (
             <div className="mt-3 rounded-lg border border-border/50 p-3">
-              <div className="text-[12px] font-medium mb-1">Prompt 原文</div>
-              <pre className="text-[11px] text-muted-foreground whitespace-pre-wrap break-words overflow-x-auto max-h-[280px] overflow-y-auto">{detailRecord.prompt_context}</pre>
+              <div className="text-[12px] font-medium mb-1">{tr('promptOriginal')}</div>
+              <pre className="text-[11px] text-muted-foreground whitespace-pre-wrap break-words overflow-x-auto max-h-[280px] overflow-y-auto scrollbar">{detailRecord.prompt_context}</pre>
             </div>
           ) : null}
         </DialogContent>

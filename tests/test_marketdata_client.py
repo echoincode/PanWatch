@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 from marketdata import Quote
-import src.core.marketdata_client as mc
+import src.platform.marketdata.marketdata_client as mc
 
 
 def test_quote_to_row_keys():
@@ -42,3 +42,17 @@ def test_db_config_provider_maps_rows(monkeypatch):
         ("tencent", 1, True, {"k": "v"}),
         ("yfinance", 2, True, {}),
     ]
+
+
+def test_db_config_provider_preserves_configured_us_kline_fallbacks(monkeypatch):
+    """A failing fallback must not exclude the configured primary provider."""
+    rows = [
+        SimpleNamespace(provider="tencent", priority=0, config={}, supports_batch=False),
+        SimpleNamespace(provider="stooq", priority=15, config={}, supports_batch=False),
+    ]
+    cp = mc.DbConfigProvider()
+    monkeypatch.setattr(cp, "_query_rows", lambda datatype: rows)
+
+    got = cp.sources_for("kline", "US")
+
+    assert [s.vendor for s in got] == ["tencent", "stooq"]

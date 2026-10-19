@@ -1,0 +1,844 @@
+"""Bounded, observable execution loop for a host-supplied model and tools."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import time
+from collections.abc import Sequence
+
+from .contracts import (
+    AgentCheckpoint,
+    ApprovalDecision,
+    EventType,
+    ModelMessage,
+    PendingApproval,
+    PermissionMode,
+    RunRequest,
+    RunResult,
+    RunStatus,
+    RuntimeEvent,
+    ToolCall,
+    ToolResult,
+    ToolSpec,
+)
+from .errors import UnknownTool
+from .extensions import BeforeModelTurnContext, ExtensionToolContext, RuntimeExtension
+from .policy import ReadOnlyToolPolicy
+from .ports import EventSink, ModelPort, ToolPolicy
+from .registry import ToolRegistry
+
+_MAX_IDENTICAL_TOOL_CALLS = 2
+_REQUIRED_TOOL_CHOICE = "required"
+_REQUIRED_TOOL_REPAIR_MESSAGE = (
+    "本轮请求需要执行写入操作。不要用自然语言代替操作结果，"
+    "必须调用可用的写入工具；如果缺少必要信息，请明确说明。"
+)
+
+
+def _tool_call_fingerprint(call: ToolCall) -> str:
+    """Create a stable key for detecting a model repeating one tool request."""
+    return f"{call.name}:{json.dumps(call.arguments, ensure_ascii=False, sort_keys=True, separators=(',', ':'))}"
+
+
+def _duration_ms(started_at: float) -> int:
+    """Convert a monotonic interval into a non-negative display duration."""
+    return max(0, round((time.monotonic() - started_at) * 1000))
+
+
+def _stable_error_code(error: BaseException, fallback: str) -> str:
+    """Preserve an explicitly public host error code without coupling layers."""
+    code = getattr(error, "error_code", "")
+    return code if isinstance(code, str) and code else fallback
+
+
+class AgentRuntime:
+    """A serial tool loop with hard limits and durable approval pauses.
+
+    Persistence and browser transport remain host concerns. The runtime only
+    owns provider-neutral messages, permission decisions and portable events.
+    """
+
+    def __init__(
+        self,
+        model: ModelPort,
+        tools: ToolRegistry,
+        policy: ToolPolicy | None = None,
+        *,
+        extensions: Sequence[RuntimeExtension] | None = None,
+    ) -> None:
+        self._model = model
+        self._tools = tools
+        self._policy = policy or ReadOnlyToolPolicy()
+        self._extensions = tuple(extensions or ())
+
+    async def run(self, request: RunRequest, sink: EventSink) -> RunResult:
+        """Start a new run and publish the durable creation fact."""
+        await self._publish(sink, request, EventType.RUN_CREATED)
+        return await self._run_loop(
+            request,
+            sink,
+            messages=[message.model_copy(deep=True) for message in request.messages],
+            answer="",
+            step_index=0,
+            tool_calls=0,
+            deadline=time.monotonic() + request.limits.run_timeout_seconds,
+        )
+
+    async def resume(
+        self,
+        request: RunRequest,
+        checkpoint: AgentCheckpoint,
+        decisions: dict[str, ApprovalDecision],
+        sink: EventSink,
+    ) -> RunResult:
+        """Apply supplied decisions and pause again for remaining calls.
+
+        Hosts may present one checkpoint as several independent approval cards.
+        A resume therefore accepts any non-empty subset of pending call IDs:
+        decided calls execute now while undecided calls stay in a new checkpoint.
+        Once the last card is decided, normal model execution continues.
+        """
+        pending_ids = {pending.call_id for pending in checkpoint.pending_approvals}
+        decision_ids = set(decisions)
+        if not pending_ids or not decision_ids or not decision_ids <= pending_ids:
+            raise ValueError(
+                "decisions must contain one or more pending approval call IDs"
+            )
+
+        messages = [message.model_copy(deep=True) for message in checkpoint.messages]
+        answer = checkpoint.answer
+        tool_calls = checkpoint.tool_calls_used
+        deadline = time.monotonic() + request.limits.run_timeout_seconds
+
+        remaining_pending: list[PendingApproval] = []
+        try:
+            for pending in checkpoint.pending_approvals:
+                if pending.call_id not in decisions:
+                    remaining_pending.append(pending)
+                    continue
+                call = ToolCall(
+                    id=pending.call_id,
+                    name=pending.tool_name,
+                    arguments=pending.arguments,
+                )
+                if decisions[pending.call_id] is ApprovalDecision.APPROVED:
+                    result, error_code = await self._execute_call(
+                        request, sink, call, deadline
+                    )
+                    if error_code:
+                        return await self._finish(
+                            sink,
+                            request,
+                            RunStatus.PARTIAL,
+                            answer,
+                            tool_calls,
+                            error_code,
+                        )
+                else:
+                    result = ToolResult.failure(
+                        summary="用户拒绝了此操作",
+                        error_code="approval_rejected",
+                    )
+                    await self._publish_tool_completed(sink, request, call, result)
+                self._append_tool_result(messages, call, result)
+        except TimeoutError:
+            return await self._finish(
+                sink, request, RunStatus.PARTIAL, answer, tool_calls, "run_timeout"
+            )
+        except asyncio.CancelledError:
+            return await self._finish(
+                sink, request, RunStatus.CANCELLED, answer, tool_calls, "cancelled"
+            )
+        except Exception as exc:  # noqa: BLE001 - hosts receive a stable terminal runtime result
+            return await self._finish(
+                sink,
+                request,
+                RunStatus.FAILED,
+                answer,
+                tool_calls,
+                _stable_error_code(exc, "runtime_failed"),
+            )
+
+        if remaining_pending:
+            next_checkpoint = AgentCheckpoint(
+                messages=messages,
+                answer=answer,
+                step_index=checkpoint.step_index,
+                tool_calls_used=tool_calls,
+                pending_approvals=remaining_pending,
+            )
+            await self._publish(
+                sink,
+                request,
+                EventType.APPROVAL_REQUIRED,
+                {
+                    "calls": [
+                        pending_call.model_dump(mode="json")
+                        for pending_call in remaining_pending
+                    ]
+                },
+            )
+            return RunResult(
+                run_id=request.run_id,
+                status=RunStatus.WAITING_FOR_APPROVAL,
+                answer=answer,
+                tool_calls=tool_calls,
+                checkpoint=next_checkpoint,
+                pending_approvals=remaining_pending,
+            )
+
+        return await self._run_loop(
+            request,
+            sink,
+            messages=messages,
+            answer=answer,
+            step_index=checkpoint.step_index,
+            tool_calls=tool_calls,
+            deadline=deadline,
+        )
+
+    async def _run_loop(
+        self,
+        request: RunRequest,
+        sink: EventSink,
+        *,
+        messages: list[ModelMessage],
+        answer: str,
+        step_index: int,
+        tool_calls: int,
+        deadline: float,
+    ) -> RunResult:
+        async def emit_token(token: str) -> None:
+            nonlocal answer
+            answer += token
+            await self._publish(sink, request, EventType.ANSWER_TOKEN, {"token": token})
+
+        current_tool_choice: str | None = None
+
+        async def emit_model_token(token: str) -> None:
+            # A required-tool turn is an internal action proposal.  Never leak
+            # its preamble to the user before the tool has actually run.
+            if current_tool_choice == _REQUIRED_TOOL_CHOICE:
+                return
+            await emit_token(token)
+
+        last_tool_fingerprint = ""
+        identical_tool_calls = 0
+        required_tool_repair_used = False
+        try:
+            for current_step in range(step_index + 1, request.limits.max_steps + 1):
+                self._ensure_before_deadline(deadline)
+                model_tools, extension_tools = await self._resolve_model_tools(
+                    request, messages, sink, deadline
+                )
+                await self._publish(
+                    sink,
+                    request,
+                    EventType.STEP_UPDATED,
+                    {"step": current_step, "status": "running"},
+                )
+                current_tool_choice = self._tool_choice_for_turn(request, messages)
+                if current_tool_choice == _REQUIRED_TOOL_CHOICE and not model_tools:
+                    return await self._finish(
+                        sink,
+                        request,
+                        RunStatus.PARTIAL,
+                        answer,
+                        tool_calls,
+                        "permission_denied",
+                    )
+                model_started_at = time.monotonic()
+                try:
+                    turn = await self._run_model_turn(
+                        model_tools,
+                        messages,
+                        emit_model_token,
+                        deadline,
+                        current_tool_choice,
+                    )
+                except TimeoutError:
+                    await self._publish(
+                        sink,
+                        request,
+                        EventType.MODEL_USAGE,
+                        {
+                            "source": "estimated",
+                            "duration_ms": _duration_ms(model_started_at),
+                            "usage_available": False,
+                            "error_code": "run_timeout",
+                        },
+                    )
+                    raise
+                except asyncio.CancelledError:
+                    await self._publish(
+                        sink,
+                        request,
+                        EventType.MODEL_USAGE,
+                        {
+                            "source": "estimated",
+                            "duration_ms": _duration_ms(model_started_at),
+                            "usage_available": False,
+                            "error_code": "cancelled",
+                        },
+                    )
+                    raise
+                except Exception as exc:
+                    await self._publish(
+                        sink,
+                        request,
+                        EventType.MODEL_USAGE,
+                        {
+                            "source": "estimated",
+                            "duration_ms": _duration_ms(model_started_at),
+                            "usage_available": False,
+                            "error_code": _stable_error_code(exc, "model_failed"),
+                        },
+                    )
+                    raise
+                usage_data = (
+                    turn.usage.model_dump(mode="json")
+                    if turn.usage is not None
+                    else {"source": "estimated"}
+                )
+                usage_data.update(
+                    {
+                        "duration_ms": _duration_ms(model_started_at),
+                        "usage_available": turn.usage is not None,
+                    }
+                )
+                await self._publish(
+                    sink,
+                    request,
+                    EventType.MODEL_USAGE,
+                    usage_data,
+                )
+                if turn.content and not answer and current_tool_choice != _REQUIRED_TOOL_CHOICE:
+                    await emit_token(turn.content)
+
+                if not turn.tool_calls:
+                    if current_tool_choice == _REQUIRED_TOOL_CHOICE:
+                        if not required_tool_repair_used:
+                            required_tool_repair_used = True
+                            messages.append(
+                                ModelMessage(
+                                    role="system",
+                                    content=_REQUIRED_TOOL_REPAIR_MESSAGE,
+                                )
+                            )
+                            continue
+                        return await self._finish(
+                            sink,
+                            request,
+                            RunStatus.PARTIAL,
+                            answer,
+                            tool_calls,
+                            "required_tool_call_missing",
+                        )
+                    return await self._finish(
+                        sink, request, RunStatus.COMPLETED, answer, tool_calls
+                    )
+
+                # An OpenAI-compatible provider needs every result associated
+                # with exactly one preceding assistant tool-call turn.
+                messages.append(
+                    ModelMessage(
+                        role="assistant",
+                        content=turn.content,
+                        tool_calls=[
+                            call.model_copy(deep=True) for call in turn.tool_calls
+                        ],
+                    )
+                )
+                pending: list[PendingApproval] = []
+                for call in turn.tool_calls:
+                    if tool_calls >= request.limits.max_tool_calls:
+                        return await self._finish(
+                            sink,
+                            request,
+                            RunStatus.PARTIAL,
+                            answer,
+                            tool_calls,
+                            "tool_call_limit",
+                        )
+                    tool_calls += 1
+                    extension_tool = extension_tools.get(call.name)
+                    try:
+                        registered_tool = self._tools.get(call.name)
+                    except UnknownTool:
+                        registered_tool = None
+                    if registered_tool is None and extension_tool is None:
+                        return await self._finish(
+                            sink,
+                            request,
+                            RunStatus.PARTIAL,
+                            answer,
+                            tool_calls,
+                            "unknown_tool",
+                        )
+                    tool_spec = (
+                        registered_tool.spec
+                        if registered_tool is not None
+                        else extension_tool[0]
+                    )
+
+                    fingerprint = _tool_call_fingerprint(call)
+                    if fingerprint == last_tool_fingerprint:
+                        identical_tool_calls += 1
+                    else:
+                        last_tool_fingerprint = fingerprint
+                        identical_tool_calls = 1
+                    if identical_tool_calls >= _MAX_IDENTICAL_TOOL_CALLS:
+                        return await self._finish(
+                            sink,
+                            request,
+                            RunStatus.PARTIAL,
+                            answer,
+                            tool_calls,
+                            "repeated_tool_call",
+                        )
+
+                    decision = await self._policy.decide(request, tool_spec, call)
+                    if decision.mode is PermissionMode.ASK:
+                        pending.append(
+                            PendingApproval(
+                                call_id=call.id,
+                                tool_name=call.name,
+                                risk=tool_spec.risk,
+                                arguments=call.arguments,
+                            )
+                        )
+                        continue
+                    if decision.mode is PermissionMode.DENY:
+                        result = ToolResult.failure(
+                            summary=decision.reason or "工具权限不足", error_code="permission_denied"
+                        )
+                        await self._publish_tool_completed(sink, request, call, result)
+                        self._append_tool_result(messages, call, result)
+                        continue
+
+                    if extension_tool is not None and registered_tool is None:
+                        result, error_code = await self._execute_extension_call(
+                            request,
+                            sink,
+                            call,
+                            tool_spec,
+                            extension_tool[1],
+                            messages,
+                            model_tools,
+                            deadline,
+                        )
+                    else:
+                        result, error_code = await self._execute_call(
+                            request, sink, call, deadline
+                        )
+                    if error_code:
+                        return await self._finish(
+                            sink,
+                            request,
+                            RunStatus.PARTIAL,
+                            answer,
+                            tool_calls,
+                            error_code,
+                        )
+                    self._append_tool_result(messages, call, result)
+
+                if pending:
+                    checkpoint = AgentCheckpoint(
+                        messages=messages,
+                        answer=answer,
+                        step_index=current_step,
+                        tool_calls_used=tool_calls,
+                        pending_approvals=pending,
+                    )
+                    await self._publish(
+                        sink,
+                        request,
+                        EventType.APPROVAL_REQUIRED,
+                        {
+                            "calls": [
+                                pending_call.model_dump(mode="json")
+                                for pending_call in pending
+                            ]
+                        },
+                    )
+                    return RunResult(
+                        run_id=request.run_id,
+                        status=RunStatus.WAITING_FOR_APPROVAL,
+                        answer=answer,
+                        tool_calls=tool_calls,
+                        checkpoint=checkpoint,
+                        pending_approvals=pending,
+                    )
+
+            return await self._finish(
+                sink, request, RunStatus.PARTIAL, answer, tool_calls, "step_limit"
+            )
+        except TimeoutError:
+            return await self._finish(
+                sink, request, RunStatus.PARTIAL, answer, tool_calls, "run_timeout"
+            )
+        except asyncio.CancelledError:
+            return await self._finish(
+                sink, request, RunStatus.CANCELLED, answer, tool_calls, "cancelled"
+            )
+        except Exception as exc:  # noqa: BLE001 - hosts receive a stable terminal runtime result
+            return await self._finish(
+                sink,
+                request,
+                RunStatus.FAILED,
+                answer,
+                tool_calls,
+                _stable_error_code(exc, "runtime_failed"),
+            )
+
+    async def _run_model_turn(
+        self,
+        model_tools: list[ToolSpec],
+        messages,
+        emit_token,
+        deadline,
+        tool_choice: str | None = None,
+    ):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError
+        async with asyncio.timeout(remaining):
+            if tool_choice is None:
+                return await self._model.run_turn(messages, model_tools, emit_token)
+            return await self._model.run_turn(
+                messages,
+                model_tools,
+                emit_token,
+                tool_choice=tool_choice,
+            )
+
+    async def _resolve_model_tools(
+        self,
+        request: RunRequest,
+        messages: list[ModelMessage],
+        sink: EventSink,
+        deadline: float,
+    ) -> tuple[list[ToolSpec], dict[str, tuple[ToolSpec, RuntimeExtension]]]:
+        """Resolve registered tools plus virtual tools owned by extensions."""
+        raw_allowed_tool_names = request.context.get("allowed_tool_names")
+        tools_are_restricted = raw_allowed_tool_names is not None
+        allowed_tool_names = (
+            [name for name in raw_allowed_tool_names if isinstance(name, str)]
+            if isinstance(raw_allowed_tool_names, (list, tuple, set))
+            else []
+        )
+        allowed_tool_name_set = set(allowed_tool_names)
+        model_tools = self._tools.model_tools(
+            request,
+            self._policy,
+            names=allowed_tool_names if tools_are_restricted else None,
+            include_deferred=tools_are_restricted,
+        )
+        extension_tools: dict[str, tuple[ToolSpec, RuntimeExtension]] = {}
+        for extension in self._extensions:
+            extension_name = getattr(extension, "name", extension.__class__.__name__)
+
+            async def emit_extension_event(
+                event_name: str, data: dict, *, _extension_name=extension_name
+            ) -> None:
+                await self._publish(
+                    sink,
+                    request,
+                    EventType.EXTENSION_EVENT,
+                    {
+                        "extension": _extension_name,
+                        "event": event_name,
+                        "data": data,
+                    },
+                )
+
+            context = BeforeModelTurnContext(
+                request=request,
+                messages=tuple(message.model_copy(deep=True) for message in messages),
+                available_tools=tuple(model_tools),
+                policy=self._policy,
+                emit_event=emit_extension_event,
+            )
+            try:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError
+                async with asyncio.timeout(remaining):
+                    decision = await extension.before_model_turn(context)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - extensions are optional boundaries
+                await emit_extension_event(
+                    "fallback",
+                    {"reason": "extension_failed", "error_type": type(exc).__name__},
+                )
+                continue
+            if decision is not None and decision.tool_names is not None:
+                selected_names = list(decision.tool_names)
+                if tools_are_restricted:
+                    selected_names = [
+                        name for name in selected_names if name in allowed_tool_name_set
+                    ]
+                model_tools = self._tools.model_tools(
+                    request,
+                    self._policy,
+                    names=selected_names,
+                    include_deferred=True,
+                )
+                # Virtual tools belong to earlier extensions rather than the registry.
+                model_tools.extend(
+                    tool
+                    for name, (tool, _) in extension_tools.items()
+                    if name in selected_names and self._policy.is_tool_visible(request, tool)
+                )
+            if decision is not None and decision.additional_tools:
+                for tool in decision.additional_tools:
+                    if tools_are_restricted and tool.name not in allowed_tool_name_set:
+                        continue
+                    if tool.name in extension_tools or any(
+                        item.name == tool.name for item in model_tools
+                    ):
+                        continue
+                    if not self._policy.is_tool_visible(request, tool):
+                        continue
+                    extension_tools[tool.name] = (tool, extension)
+                    model_tools.append(tool)
+        return model_tools, extension_tools
+
+    async def _execute_extension_call(
+        self,
+        request: RunRequest,
+        sink: EventSink,
+        call: ToolCall,
+        tool: ToolSpec,
+        extension: RuntimeExtension,
+        messages: list[ModelMessage],
+        model_tools: list[ToolSpec],
+        deadline: float,
+    ) -> tuple[ToolResult, str | None]:
+        """Execute a virtual extension tool without giving it a host executor."""
+        handler = getattr(extension, "handle_tool_call", None)
+        if handler is None:
+            return ToolResult.failure(
+                summary="请求的扩展工具不可用", error_code="unknown_tool"
+            ), "unknown_tool"
+        started_at = time.monotonic()
+        await self._publish(
+            sink,
+            request,
+            EventType.TOOL_STARTED,
+            {"call_id": call.id, "tool": call.name, "arguments": call.arguments},
+        )
+        try:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError
+            async with asyncio.timeout(min(request.limits.tool_timeout_seconds, remaining)):
+                result = await handler(
+                    ExtensionToolContext(
+                        request=request,
+                        messages=tuple(
+                            message.model_copy(deep=True) for message in messages
+                        ),
+                        call=call,
+                        tool=tool,
+                        available_tools=tuple(model_tools),
+                        policy=self._policy,
+                        emit_event=lambda event_name, data: self._publish(
+                            sink,
+                            request,
+                            EventType.EXTENSION_EVENT,
+                            {
+                                "extension": getattr(
+                                    extension,
+                                    "name",
+                                    extension.__class__.__name__,
+                                ),
+                                "event": event_name,
+                                "data": data,
+                            },
+                        ),
+                    )
+                )
+        except TimeoutError:
+            result = ToolResult.failure(summary="扩展工具调用超时", error_code="tool_timeout")
+        except Exception as exc:  # noqa: BLE001 - extension is an optional boundary
+            error_code = _stable_error_code(exc, "tool_failed")
+            result = ToolResult.failure(
+                summary="扩展工具调用失败",
+                error_code=error_code,
+            )
+        if result is None:
+            result = ToolResult.failure(
+                summary="请求的扩展工具不可用", error_code="unknown_tool"
+            )
+        await self._publish_tool_completed(
+            sink,
+            request,
+            call,
+            result,
+            duration_ms=_duration_ms(started_at),
+        )
+        if not result.ok:
+            return result, result.error_code or "tool_failed"
+        return result, None
+
+    @staticmethod
+    def _tool_choice_for_turn(request: RunRequest, messages: list[ModelMessage]) -> str | None:
+        """Require a tool only for the initial turn of an action run.
+
+        Once a tool result is present, the model must be allowed to produce a
+        normal final answer; otherwise ``required`` would force an endless
+        second tool call after a successful write.
+        """
+        if request.context.get("tool_choice") != _REQUIRED_TOOL_CHOICE:
+            return None
+        if any(message.role == "tool" for message in messages):
+            # The first turn is restricted to registered write tools. Once a
+            # result exists, restore the host's normal tool visibility so the
+            # model can read context and compose a grounded final answer.
+            request.context.pop("allowed_tool_names", None)
+            return None
+        return _REQUIRED_TOOL_CHOICE
+
+    async def _execute_call(
+        self, request: RunRequest, sink: EventSink, call: ToolCall, deadline: float
+    ) -> tuple[ToolResult, str | None]:
+        try:
+            self._tools.get(call.name)
+        except UnknownTool:
+            return ToolResult.failure(
+                summary="请求的工具不可用", error_code="unknown_tool"
+            ), "unknown_tool"
+
+        started_at = time.monotonic()
+        await self._publish(
+            sink,
+            request,
+            EventType.TOOL_STARTED,
+            {"call_id": call.id, "tool": call.name, "arguments": call.arguments},
+        )
+        result: ToolResult | None = None
+        attempt_count = 0
+        for attempt in range(request.limits.step_retry_count + 1):
+            attempt_count = attempt + 1
+            try:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError
+                timeout = min(request.limits.tool_timeout_seconds, remaining)
+                async with asyncio.timeout(timeout):
+                    result = await self._tools.execute(
+                        call.name, request, call.arguments
+                    )
+                break
+            except TimeoutError:
+                if time.monotonic() >= deadline:
+                    raise
+                if attempt == request.limits.step_retry_count:
+                    result = ToolResult.failure(
+                        summary="工具调用超时", error_code="tool_timeout"
+                    )
+            except Exception:  # noqa: BLE001 - tool adapters are untrusted host boundaries
+                if attempt == request.limits.step_retry_count:
+                    result = ToolResult.failure(
+                        summary="工具调用失败", error_code="tool_failed"
+                    )
+
+        assert result is not None
+        await self._publish_tool_completed(
+            sink,
+            request,
+            call,
+            result,
+            duration_ms=_duration_ms(started_at),
+            attempt_count=attempt_count,
+        )
+        if not result.ok:
+            return result, result.error_code or "tool_failed"
+        return result, None
+
+    @staticmethod
+    def _append_tool_result(
+        messages: list[ModelMessage], call: ToolCall, result: ToolResult
+    ) -> None:
+        messages.append(
+            ModelMessage(
+                role="tool",
+                name=call.name,
+                tool_call_id=call.id,
+                content=json.dumps(result.model_dump(mode="json"), ensure_ascii=False),
+            )
+        )
+
+    async def _publish_tool_completed(
+        self,
+        sink: EventSink,
+        request: RunRequest,
+        call: ToolCall,
+        result: ToolResult,
+        *,
+        duration_ms: int = 0,
+        attempt_count: int = 1,
+    ) -> None:
+        await self._publish(
+            sink,
+            request,
+            EventType.TOOL_COMPLETED,
+            {
+                "call_id": call.id,
+                "tool": call.name,
+                "ok": result.ok,
+                "summary": result.summary,
+                "data": result.model_dump(mode="json")["data"],
+                "sources": [source.model_dump(mode="json") for source in result.sources],
+                "observed_at": (
+                    result.observed_at.isoformat() if result.observed_at else None
+                ),
+                "error_code": result.error_code,
+                "duration_ms": duration_ms,
+                "attempt_count": attempt_count,
+            },
+        )
+
+    @staticmethod
+    def _ensure_before_deadline(deadline: float) -> None:
+        if time.monotonic() >= deadline:
+            raise TimeoutError
+
+    async def _finish(
+        self,
+        sink: EventSink,
+        request: RunRequest,
+        status: RunStatus,
+        answer: str,
+        tool_calls: int,
+        error_code: str | None = None,
+    ) -> RunResult:
+        event_type = (
+            EventType.RUN_COMPLETED
+            if status is RunStatus.COMPLETED
+            else EventType.RUN_FAILED
+        )
+        await self._publish(
+            sink, request, event_type, {"status": status, "error_code": error_code}
+        )
+        return RunResult(
+            run_id=request.run_id,
+            status=status,
+            answer=answer,
+            tool_calls=tool_calls,
+            error_code=error_code,
+        )
+
+    @staticmethod
+    async def _publish(
+        sink: EventSink,
+        request: RunRequest,
+        event_type: EventType,
+        data: dict | None = None,
+    ) -> None:
+        await sink.publish(
+            RuntimeEvent(type=event_type, run_id=request.run_id, data=data or {})
+        )

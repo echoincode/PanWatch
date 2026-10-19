@@ -4,12 +4,12 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from src.core.paper_trading_engine import (
+from src.modules.paper_trading.paper_trading_engine import (
     _serialize_position,
     _serialize_signal,
     _serialize_trade,
 )
-from src.core.paper_trading_notifier import (
+from src.modules.paper_trading.paper_trading_notifier import (
     _dedup_signals,
     _format_entry_message,
     _format_exit_message,
@@ -17,7 +17,7 @@ from src.core.paper_trading_notifier import (
     _format_daily_summary,
     _strategy_label,
 )
-from src.core.stock_link import stock_url
+from src.modules.administration.stock_link import stock_url
 
 
 def _make_signal(**kwargs):
@@ -170,6 +170,18 @@ class TestPremarketDedup(unittest.TestCase):
 
 
 class TestMessageFormat(unittest.TestCase):
+    def test_english_preference_localizes_paper_trading_notification_templates(self):
+        position = {
+            "stock_symbol": "002837", "stock_market": "CN", "stock_name": "Inovance",
+            "quantity": 100, "entry_price": 113.0, "stop_loss": 104.0,
+            "target_price": 130.0, "strategy_code": "trend_follow",
+        }
+        title, body = _format_entry_message(position, None, english=True)
+
+        self.assertIn("Paper trading entry", title)
+        self.assertIn("Entry:", body)
+        self.assertIn("Trend continuation", body)
+
     def test_entry_message_format(self):
         """建仓通知 — 格式含价格/策略/链接"""
         pos_data = {

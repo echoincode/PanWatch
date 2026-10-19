@@ -1,0 +1,293 @@
+export const bizUi = {
+  tour: {
+  "title": "新手操作引导",
+  "welcome": "跟着高亮提示完成一条连贯流程：添加自选、查看行情、连接 AI 并生成第一份分析，然后按需设置提醒和通知。高亮区域可以直接点击，随时可暂停。",
+  "flow": "完整操作流程",
+  "start": "开始操作引导",
+  "progress": "第 {{current}} / {{total}} 步",
+  "pause": "暂停引导",
+  "back": "上一步",
+  "next": "下一步",
+  "skip": "跳过此步",
+  "finish": "完成引导",
+  "verified": "操作已完成，可以继续",
+  "actOnPage": "请点击高亮区域，在页面上完成这一步。",
+  "chooseExisting": "已有自选？选择一只继续",
+  "waiting": "正在寻找页面上的操作入口…",
+  "leftPage": "你已离开当前引导页面。进度已保存。",
+  "return": "回到当前步骤",
+  "openAnalysis": "打开首次分析",
+  "analysisNotReady": "请先查看行情，并在设置中测试默认模型。",
+  "doneTitle": "操作引导已完成",
+  "doneDescription": "你可以继续使用这些页面，也可以从「开始使用」重新打开引导。跳过的可选项随时可以在设置中补充。",
+  "doneAction": "开始使用",
+  "steps": {
+    "stock": {
+      "title": "先添加一只自选",
+      "description": "点击高亮的「添加自选」，搜索股票并确认添加。已有自选也可以直接选一只。"
+    },
+    "stockForm": {
+      "title": "搜索并确认添加",
+      "description": "输入代码或名称，选择搜索结果，再点击「确认添加」。保存后会进入行情步骤。"
+    },
+    "stockChoose": {
+      "title": "选择一只现有自选",
+      "description": "点击任意一张自选卡片或股票名称，用它完成这次体验。示例股票不会自动算作已选择。"
+    },
+    "quote": {
+      "title": "亲手刷新一次行情",
+      "description": "点击高亮的刷新按钮，获取刚才所选股票的真实行情。成功后会高亮对应卡片。"
+    },
+    "quoteRead": {
+      "title": "查看这只股票的行情",
+      "description": "这里显示价格和涨跌幅，点击股票名称还能打开详情。注意数据时间，休市期间可能显示最近交易日行情。点击下一步继续。"
+    },
+    "ai": {
+      "title": "连接并测试默认模型",
+      "description": "在这里添加 AI 服务商和模型，设置一个默认模型，再点击它旁边的测试按钮。已有默认模型可直接测试。"
+    },
+    "providerForm": {
+      "title": "填写服务商连接信息",
+      "description": "填写名称、接口地址和 API Key 后保存。接着为这个服务商添加模型。"
+    },
+    "modelForm": {
+      "title": "添加一个可用模型",
+      "description": "选择服务商并填写模型标识后保存，也可以从发现结果添加。返回列表，将模型设为默认并测试。"
+    },
+    "analysis": {
+      "title": "打开首次分析",
+      "description": "点击这个入口，在弹窗里确认生成。分析使用刚才验证的默认模型，不会自动启动。"
+    },
+    "analysisForm": {
+      "title": "生成并等待结果",
+      "description": "点击「生成首次分析」。这次会实际调用模型并产生用量，你也可以关闭弹窗，稍后回来查看。"
+    },
+    "analysisRead": {
+      "title": "阅读第一份分析",
+      "description": "结果保存在这里，附有模型和生成时间。阅读后点击下一步，去试试价格提醒。"
+    },
+    "alert": {
+      "title": "设置一个价格提醒",
+      "description": "点击「新建提醒」，为刚才的股票填写触发条件。这个步骤可选，也可以跳过。"
+    },
+    "alertForm": {
+      "title": "填写并保存提醒规则",
+      "description": "确认标的，填写规则名称、价格条件和通知渠道，然后保存。规则会实际生效，按你设置的条件监控。"
+    },
+    "notify": {
+      "title": "测试通知渠道",
+      "description": "在这里添加并启用通知渠道，再点击纸飞机测试按钮。这会发送一条真实测试消息；暂时不需要可以跳过。"
+    },
+    "channelForm": {
+      "title": "配置通知渠道",
+      "description": "选择渠道类型并填写接收端信息，保存后启用，再点击列表中的纸飞机按钮测试。"
+    }
+  }
+},
+  guideCenter: {
+  "title": "引导中心",
+  "description": "从第一次使用到进阶探索，所有操作引导都在这里。每条路线独立保存进度，完成后也可以再次体验。",
+  "mainTitle": "主流程：从自选到第一份 AI 分析",
+  "mainBadge": "首次自动进入 · 必做步骤不可跳过",
+  "mainDescription": "添加自选 → 查看行情 → 连接 AI → 生成分析。价格提醒和通知接在后面，可按需完成；整个流程可以暂停，稍后继续。",
+  "moreTitle": "继续探索",
+  "moreDescription": "进入真实页面跟着高亮提示操作。探索路线的进度表示已阅读提示；实际配置和执行仍由你在页面上确认。",
+  "replay": "再次体验",
+  "inProgress": "进行中",
+  "notStarted": "未开始",
+  "trackProgress": "已了解 {{done}} / {{total}} 步",
+  "explore": "开始探索",
+  "understood": "我已了解，继续",
+  "finishTrack": "完成并返回中心",
+  "closeDialog": "在这里完成操作，或关闭弹窗后继续引导。",
+  "explorationHint": "可以先尝试高亮控件，再确认已了解这一步。",
+  "tracks": {
+    "opportunities": {
+      "title": "发现与评估机会",
+      "description": "学会筛选候选、阅读信号依据，并在验证中心回看建议结果。",
+      "steps": {
+        "filters": {
+          "title": "筛选你关心的机会",
+          "description": "点击市场、来源、策略或风险筛选，再点击应用。没有候选时可放宽条件；候选由分析任务产生，不会因为进入引导而生成。"
+        },
+        "signals": {
+          "title": "阅读信号，再决定是否关注",
+          "description": "有候选时点击卡片查看股票详情，先看数据时间、依据、入场区间和失效条件，再主动添加自选。空列表表示当前没有匹配信号，可以继续了解验证中心。"
+        },
+        "evaluation": {
+          "title": "回看建议的后续表现",
+          "description": "使用这里的筛选查看历史建议及后续表现，点击有记录的行查看依据。没有已运行的分析时这里会为空；完成主流程后可回来继续查看。"
+        }
+      }
+    },
+    "paper": {
+      "title": "体验模拟盘",
+      "description": "认识模拟资金、市场分配、运行开关与持仓记录，按自己的选择启动。",
+      "steps": {
+        "capital": {
+          "title": "先查看模拟资金配置",
+          "description": "点击资金配置，查看总资金和 A 股、港股、美股分配比例。修改后需要主动保存；这是模拟账户，独立于实际持仓。"
+        },
+        "controls": {
+          "title": "了解模拟盘的运行开关",
+          "description": "这个开关控制模拟盘是否自动处理信号。确认资金配置后再决定是否启动；上方扫描按钮会处理当前信号，可能产生模拟交易。引导不会替你开启或扫描。"
+        },
+        "positions": {
+          "title": "查看持仓与交易记录",
+          "description": "这里展示模拟持仓、盈亏和可卖数量。有成交后可从上方查看已结束的交易。A 股遵守 T+1；没有信号或交易时列表为空，可以稍后回来。"
+        }
+      }
+    },
+    "assistant": {
+      "title": "使用研究助手",
+      "description": "从自己的问题开始，了解工具权限和后台任务，保留自己的执行选择。",
+      "steps": {
+        "composer": {
+          "title": "提出一个具体问题",
+          "description": "在输入框写下标的、时间范围和你关心的问题，也可以选取股票。点击发送才会实际调用模型；暂时没有模型时，先完成主流程中的 AI 连接。"
+        },
+        "context": {
+          "title": "查看助手的工具权限",
+          "description": "点击这个按钮查看可用工具及权限。涉及写入或其他需要确认的操作，助手会先请求审批；请阅读操作内容再决定是否允许。"
+        },
+        "activity": {
+          "title": "找到会话与进行中的任务",
+          "description": "这里可以返回会话列表、新建研究或查看当前上下文。发送问题后，任务进度和待审批操作会出现在会话中；离开页面后仍可以回来继续查看。"
+        }
+      }
+    },
+    "automation": {
+      "title": "配置日常分析任务",
+      "description": "认识执行时间、绑定标的与历史记录，再按需启用定时分析。",
+      "steps": {
+        "schedule": {
+          "title": "查看实际执行时间",
+          "description": "点击执行周期，查看时区和接下来运行时间，再按需要修改并保存。定时任务只有启用后才会运行，会使用所选模型额度。"
+        },
+        "binding": {
+          "title": "选择任务关注的标的",
+          "description": "点击绑定标的，再点击股票名称切换绑定状态，修改会立即保存。首次分析不会替你绑定或开启定时任务。"
+        },
+        "history": {
+          "title": "核对任务历史与结果",
+          "description": "在这里按任务类型或标的筛选运行记录，点击记录查看结果、模型和时间。尚未执行时列表为空；失败记录可用于检查模型与数据配置。"
+        }
+      }
+    },
+    "datasources": {
+      "title": "检查行情与研究数据源",
+      "description": "认识数据分类、优先级和连接测试，处理缺失数据时有地方可查。",
+      "steps": {
+        "catalog": {
+          "title": "按数据类别查找来源",
+          "description": "点击分类标题展开或收起。行情、K 线、新闻和基本面有各自的数据源；优先级较高的来源会优先尝试，失败后可能使用其他来源。"
+        },
+        "config": {
+          "title": "查看来源配置",
+          "description": "展开分类后点击设置，查看优先级、测试标的和必要的连接参数。需要密钥的来源由你填写并保存；无需密钥的内置来源也可以直接测试。"
+        },
+        "test": {
+          "title": "测试连接并阅读结果",
+          "description": "点击播放按钮测试已启用的来源，查看数据时间、返回数量和缺失明细。测试成功表示这次请求可用，其他市场或标的仍可能缺失；关闭结果弹窗后继续。"
+        }
+      }
+    }
+  }
+},
+  gettingStarted: {
+  title: '开始使用', description: '从一个关注的标的开始，亲手完成第一次行情查看和分析。进度会自动保存。',
+  bannerTitle: '让盯盘侠开始为你工作', bannerDescription: '跟着高亮提示，在真实页面上完成第一次操作。',
+  continue: '继续设置', start: '开始设置', later: '稍后处理', resume: '恢复引导', review: '查看开始指南',
+  progress: '已完成 {{done}} / {{total}} 个必要步骤', loading: '正在读取设置进度…', retry: '重试',
+  completed: '已完成', pending: '待完成', skipped: '稍后处理', optional: '可选', required: '必要',
+  quotesGoal: '先看行情', quotesGoalDesc: '无需 AI 服务，先关注标的、查看价格。',
+  aiGoal: '启用 AI 分析', aiGoalDesc: '在行情基础上连接模型，生成第一份分析。',
+  next: '下一步', backHome: '返回首页', doneTitle: '你已完成所选目标', doneDescription: '现在可以日常查看行情或分析。价格提醒和通知可以随时继续设置。',
+  chooseStock: '选择关注的标的', existingStocks: '从自选列表选择', stockPlaceholder: '请选择一个标的',
+  sampleHint: '首次启动的示例标的也可以选用；选择表示你确认关注它，无需录入持仓。',
+  search: '搜索并添加标的', searchPlaceholder: '输入名称或代码', market: '市场', markets: { CN: 'A 股', HK: '港股', US: '美股' },
+  searching: '搜索中…', noResults: '没有找到匹配标的，可在持仓页手动添加。', manageStocks: '管理或手动添加自选',
+  addStock: '添加并选择', currentStock: '当前标的：{{name}}（{{symbol}}）', selectFirst: '先选择一个关注的标的，再继续此步骤。',
+  fetchQuote: '查看行情', refreshQuote: '刷新行情', quoteHint: '休市时会展示最近一次报价。行情时间和本次获取时间可能不同。',
+  source: '数据源：{{value}}', sourceTime: '行情时间：{{value}}', observedAt: '获取时间：{{value}}', unknown: '来源未提供',
+  dataSources: '检查数据源', configureAi: '配置 AI 服务', aiHint: '添加服务商和模型，设为默认并测试。保存配置不等于连接成功。测试会调用一次所选模型。',
+  model: '默认模型', modelPlaceholder: '请选择一个模型', testModel: '测试默认模型', modelVerified: '当前默认模型已测试通过',
+  configureChanged: '修改服务地址、密钥或模型后，需要重新测试。', runAnalysis: '生成首次分析', rerunAnalysis: '重新生成分析',
+  analysisHint: '使用默认模型进行一次简短分析，可能产生服务商费用。结果包含观察、依据、关注点和数据限制。',
+  analysisScope: '首次分析不会开启定时任务、发送外部通知或产生模拟盘交易。',
+  analysisRunning: '正在获取数据并生成分析，你可以离开页面；回来后会恢复进度。',
+  analysisFailed: '本次分析未完成，可以修正配置后重试。', analysisModel: '分析模型：{{value}}', analysisTime: '生成于：{{value}}',
+  readAnalysis: '怎样阅读这份分析', readAnalysisHint: '先看结论对应的数据依据，再看数据时间和限制。缺少数据的判断需要继续核实。',
+  advanced: '进一步使用', advancedHint: '盘前 / 盘中 / 收盘 Agent 用于日常监控；TradingAgents 深度分析会进行多轮研究，耗时和费用更高，可按需手动启动。', agents: '了解分析任务',
+  createAlert: '创建价格提醒', alertTitle: '设置第一个价格提醒', alertHint: '设定你关心的条件，命中后会记录在应用内通知中心。外部推送需选择通知渠道。',
+  manageAlerts: '管理提醒', alertSaved: '所选标的已有启用中的提醒',
+  configureNotify: '配置通知渠道', notifyHint: '通知是可选的。添加渠道后，主动发送测试消息；发送成功才算通过。',
+  channel: '通知渠道', channelPlaceholder: '请选择启用的渠道', testChannel: '发送测试通知', notifyVerified: '已有启用的渠道发送测试成功',
+  deliveryHint: '测试成功表示发送端接受了消息，请在接收端确认收到。正式提醒仍需在规则中选择该渠道。',
+  skippedHint: '这一步已留待稍后，可以随时继续。', doNow: '现在设置',
+  steps: {
+    stock: { title: '关注一个标的', description: '选择已有自选，或添加你关注的标的。' },
+    quote: { title: '看到第一条行情', description: '确认价格、来源和数据时间。' },
+    ai: { title: '连接并测试 AI', description: '选择默认模型，确认它能正常响应。' },
+    analysis: { title: '完成首次分析', description: '生成并阅读一份简短的分析。' },
+    alert: { title: '设置价格提醒', description: '让重要价格条件出现在通知中心。' },
+    notify: { title: '接收外部通知', description: '接入你常用的渠道并主动测试。' },
+  },
+  errors: { load: '无法读取设置进度，请重试。', action: '操作未完成，请重试。',
+    interrupted: '服务重启中断了分析，进度已保留，请重新生成。', empty: '模型返回了空结果，请重试或更换模型。' },
+},
+  logsLogger: '日志源',
+  klineModal: { title: 'K线：{{symbol}}', fallbackTitle: 'K线', description: '日K/周K/月K切换，含MA/成交量/MACD。', noStock: '未选择股票' },
+  interactiveKline: { loadFailed: '加载K线失败', title: 'K线图', rsi: '强弱线', intervals: { day: '日K', week: '周K', month: '月K' }, refresh: '刷新', libraryFailed: '图表库加载失败（网络受限时可能发生）。可稍后重试或检查网络/代理。', metrics: { latest: '最新价', change: '涨跌', amplitude: '振幅', range: '区间高低', averageVolume: '均量' }, hover: { open: '开盘价', close: '收盘价', high: '最高价', low: '最低价', ma5: '5日均线', ma10: '10日均线', ma20: '20日均线', macd: 'MACD线', signal: '信号线', rsi: 'RSI强弱' }, momentum: '动能指标（MACD{{rsi}}）', momentumRsi: ' + RSI强弱线', help: 'MACD 用来看趋势动能和拐点；RSI 用来看是否偏热/偏弱（一般 70 以上偏热，30 以下偏弱）。', tenThousand: '{{value}}万' },
+  addPosition: { title: '加仓测算', emptySuffix: '（当前空仓 · 建仓测算）', collapse: '收起 ▾', expand: '展开 ▸', byShares: '按股数', byAmount: '按金额', shares: '加仓股数', amount: '加仓金额(元)', price: '加仓价', sharesExample: '如 200', amountExample: '如 10000', estimatedShares: '≈ {{shares}} 股{{lots}}', estimatedLots: '（≈{{lots}} 手）', afterCost: '加仓后成本', initialCost: '建仓成本', dilution: '摊薄', total: '合计股数 / 投入', lotWarning: '提示：A股通常 100 股/手，建议取整到 100 的倍数', inputHint: '填写加仓股数/金额与价格后自动计算', targetCost: '反推：目标成本', targetHint: '按加仓价反推所需股数', required: '需加 {{shares}} 股{{lots}}', approximately: '约 {{amount}} 元', targetInvalid: '需满足 加仓价 < 目标 < 现成本 才能降到该成本', evaluating: 'AI 评估中…', evaluate: '让 AI 评估适不适合加仓', aiResult: 'AI 结论 · 仅供参考', invalidInput: '请先填写有效的加仓股数/金额与价格', evalFailed: 'AI 评估失败', verdicts: { suitable: '适合', cautious: '谨慎', unsuitable: '不适合', unknown: '未知' } },
+  onboarding: { welcome: '欢迎使用盯盘侠', ready: '你的自选股已就绪，可以开始使用了', samples: '我们已为你添加了 5 只热门股票作为示例，你可以立即查看实时行情', liveTitle: '实时行情监控', liveDesc: '跟踪自选股价格变动，快速发现异动', aiTitle: 'AI 智能分析', aiDesc: '盘后日报、异动建议、技术分析', notifyTitle: '智能通知推送', notifyDesc: 'Telegram、企业微信等多渠道推送', start: '开始使用', skip: '跳过引导', configureAi: '配置 AI 分析', configureAiDesc: '连接 AI 服务后，可获得智能分析功能', aiItems: { report: '盘后日报自动分析', suggestion: '异动 AI 建议', chart: '技术图表分析' }, aiProviders: '支持 OpenAI、智谱、DeepSeek 等服务商', later: '稍后再说', configure: '前往配置', configureNotify: '配置通知渠道', configureNotifyDesc: '配置后可收到实时推送通知', notifyItems: { intraday: '盘中异动提醒', report: 'AI 分析报告推送', stop: '止盈止损预警' }, notifyProviders: '支持 Telegram、企业微信等渠道', complete: '设置完成', completeDesc: '你可以随时在「设置」页面修改配置', dashboard: '进入 Dashboard', portfolio: '管理自选股' },
+  logs: { title: '日志', autoRefresh: '自动刷新', refresh: '刷新', clear: '清空', clearConfirm: '确定清空所有日志？', search: '搜索日志内容 / trace_id / logger...', all: '全部', domains: { business: '业务优先', all: '全部', infra: '基础设施' }, flows: { all: '全部链路', premarket: '盘前分析', daily: '收盘复盘', intraday: '盘中监测', deep: '深度分析' }, records: '{{count}} 条记录', loggerFilter: 'Logger过滤', loggerHint: '默认链路会自动包含 `src.agents.base` 决策日志', filters: '过滤器：{{summary}}', clearFilters: '清空过滤', empty: '暂无日志', emptyHint: '后台运行后日志会自动出现在这里', columns: { time: '时间', level: '级别', flow: '链路', message: '消息' }, loaded: '已加载 {{loaded}} / {{total}}', loading: '加载中...', loadMore: '加载更多', noMore: '没有更多了', summary: { keyword: '关键词：{{value}}', level: '级别：{{value}}', time: '时间：{{value}}h', domain: '范围：{{value}}', flow: '链路：{{value}}', loggers: '自选 Logger：{{count}}', none: '当前无额外过滤' } },
+  suggestionBadge: { technicalPending: '暂无数据', review: '待复核', source: '来源：', unknown: '未知', expired: '（已过期）', detailTitle: '点击查看建议详情', technicalTitle: '点击查看技术面详情', technical: '技术指标', technicalShort: '指标', watch: '观望', signal: '信号', reason: '理由', aiResponse: 'AI 响应', promptContext: 'Prompt 上下文', expand: '（点击展开）', klineAsOf: 'K线截止 {{value}}', calculated: '计算 {{value}}', agents: { intraday_monitor: '盘中监测', daily_report: '盘后日报', premarket_outlook: '盘前分析', technical_fallback: '技术指标' } },
+  deepAnalysis: { title: '🧠 深度分析 · {{name}} ({{symbol}})', description: 'TradingAgents 多 Agent 决策框架 · 仅供学习研究参考，不构成投资建议', stages: { data_collection: '数据准备', market_analyst: '技术分析师', social_analyst: '情绪分析师', news_analyst: '新闻分析师', fundamentals_analyst: '基本面分析师', bull_bear_debate: '看多看空辩论', research_manager: '研究主管', trader: '交易员决策', risk_judge: '风控判定', final_decision: 'PM 整合' }, errors: { resultMissing: '结果未落库，请稍后到「AI 历史」查看', analysisFailed: '分析失败', triggerFailed: '触发失败' }, triggered: '已触发', failedTitle: '分析失败', close: '关闭', retry: '重试', idle: { upcoming: '即将分析：{{symbol}}', framework: '调用 4 类分析师（技术 / 情绪 / 新闻 / 基本面）+ 看多看空辩论 + 风控 + PM 整合', duration: '⏱ 预计耗时：3-8 分钟', async: 'ℹ️ 异步执行，可关闭弹窗，完成时通过通知渠道推送', cancel: '取消', start: '开始分析' }, running: { title: '分析进行中...', elapsed: '已用 {{time}}', currentAgent: '当前 Agent：', currentOperation: '当前操作：', dataTool: '数据工具 ', preparing: '准备中...', background: '后台运行（完成时推送通知）' }, data: { title: '数据准备明细', sources: { quote: '行情', klines: 'K 线', capital_flow: '资金流', events: '事件', financial: '财报', technical: '技术指标' }, statuses: { pending: '等待', running: '请求中', done: '完成', error: '失败降级' } }, toolkit: { title: '数据注入诊断', subtitle: '（PanWatch 数据 → TradingAgents 工具）', passthrough: '透传', fallback: '兜底', error: '错误', legendHit: '用 PanWatch 数据', legendMiss: '命中但 PanWatch 未实现', legendPassthrough: '非 A 股直接走上游 vendor', legendFallback: 'A 股但 cache 为空，走了上游', empty: '⚠️ 还没有任何工具调用记录（可能 TradingAgents 还在准备阶段）。', chars: ' · {{count}} 字符', truncated: '...（共 {{total}} 字符，仅展示前 {{shown}}）' }, usage: { total: 'Token 合计 {{value}}', input: '输入 {{value}}', output: '输出 {{value}}', unavailable: 'Token 用量未记录', partial: '部分用量（{{recorded}} / {{total}} 次调用已记录）' }, done: { analysisDate: '报告日期：{{value}}', generatedAt: '生成时间：{{value}}', dateUnavailable: '未记录', fallbackAction: '持有', fallbackAgent: 'TradingAgents 深度', cached: 'ℹ️ 缓存报告：展示此前生成的结果，本次查看未调用模型', rerun: '忽略缓存重新分析', confidence: '置信度 {{value}} / 10', details: '查看详细页', cost: '成本：${{value}}', disclaimer: '本分析由 AI 多 Agent 框架生成，仅供学习研究参考，不构成任何投资建议。投资有风险，决策需自主判断。' } },
+  stockPriceAlert: {
+    conditions: { price: '价格', change_pct: '涨跌幅%', turnover: '成交额', volume: '成交量', volume_ratio: '量比' },
+    messages: { loadFailed: '加载提醒失败', stockNotFound: '无法定位股票', createFailed: '无法创建提醒', saved: '提醒已保存', saveFailed: '保存失败', toggleFailed: '切换失败', deleted: '已删除', deleteFailed: '删除失败', deleteConfirm: '确认删除规则「{{name}}」？' },
+    alert: '提醒', priceAlert: '价格提醒', title: '{{name}} 提醒', summary: '{{market}} · 启用 {{enabled}} / 共 {{total}}', create: '新建提醒', loading: '加载中...', empty: '该股票暂无提醒规则', enabled: '启用', paused: '暂停', disable: '停用', enable: '启用', or: ' 或 ', and: ' 且 ', between: '介于', editTitle: '编辑提醒规则', createTitle: '新建提醒规则', formDescription: '支持价格、涨跌幅、成交额、量比条件，支持 AND / OR 组合', saveRule: '保存规则', defaultName: '{{name}} 价格提醒', fallbackName: '{{name}} 提醒',
+  },
+  kline: {
+    title: 'K线 / 技术指标', period: '周期：{{value}}', dataAsOf: '数据截至：{{value}}', calculatedAt: '计算时间：{{value}}', loading: '加载中...', empty: '暂无数据', held: '已持仓', notHeld: '未持仓', score: '评分 {{value}}', disclaimer: '仅基于技术指标规则生成，非投资建议', hoverHint: '提示：悬停指标标签可查看详细说明', current: '当前：{{value}}',
+    statuses: { bullish: '多头排列', bearish: '空头排列', mixed: '均线交织', goldenCross: '金叉', deathCross: '死叉', overbought: '超买', oversold: '超卖', strong: '偏强', weak: '偏弱', volumeUp: '放量', volumeDown: '缩量', upperBreak: '突破上轨', lowerBreak: '跌破下轨', positive: '为正', negative: '为负', neutral: '接近0' },
+    actions: { buy: '买入', add: '加仓', sell: '卖出', reduce: '减仓', avoid: '回避', hold: '持有', watch: '观望', alert: '提醒' },
+    neutralSignal: '技术面中性',
+    items: { trendBull: '均线多头排列，趋势偏强', trendBear: '均线空头排列，趋势偏弱', trendMixed: '均线交织，趋势不明', macdGolden: 'MACD 金叉，短线动能偏强', macdDeath: 'MACD 死叉，短线动能转弱', macdHist: 'MACD 柱体{{status}}', macdPositive: 'MACD 柱体为正（动能偏多）', macdNegative: 'MACD 柱体为负（动能偏空）', rsiOversold: 'RSI 超卖，可能存在反弹', rsiStrong: 'RSI 偏强，买盘占优', rsiOverbought: 'RSI 超买，注意回调风险', rsiWeak: 'RSI 偏弱，短线承压', rsiNeutral: 'RSI 中性', kdjGolden: 'KDJ 金叉，短线转强', kdjDeath: 'KDJ 死叉，短线转弱', bollUpper: '突破布林上轨，趋势强势', bollLower: '跌破布林下轨，走势偏弱', volumeUp: '放量配合，资金参与度提升', volumeDown: '缩量，动能不足', nearSupport: '价格接近支撑位，止跌反弹概率提升', nearResistance: '价格接近压力位，上行空间受限' },
+    tags: { bullish: '多头', bearish: '空头', macdGolden: 'MACD 金叉', macdDeath: 'MACD 死叉', rsiOversold: 'RSI 超卖', rsiStrong: 'RSI 偏强', rsiOverbought: 'RSI 超买', rsiWeak: 'RSI 偏弱', kdjGolden: 'KDJ 金叉', kdjDeath: 'KDJ 死叉', bollUpper: '突破上轨', bollLower: '跌破下轨', volumeUp: '放量', volumeDown: '缩量', nearSupport: '靠近支撑', nearResistance: '靠近压力' },
+    indicators: {
+      trend: { title: '趋势（均线排列）', description: '趋势标签来自 MA5 / MA10 / MA20 的相对位置。多头排列偏强，空头排列偏弱，均线交织更依赖成交量和关键价位。' },
+      macd: { title: 'MACD（趋势 / 动能）', description: 'DIF 上穿 DEA 为金叉，下穿为死叉；柱体正负反映当前多空动能。需结合趋势和量价确认。' },
+      rsi: { title: 'RSI（相对强弱）', description: 'RSI6 衡量近 6 个交易日的相对强弱。70 以上偏强，80 以上超买；30 以下偏弱，20 以下超卖。' },
+      kdj: { title: 'KDJ（转折 / 超买超卖）', description: 'J 值更敏感，金叉 / 死叉用于观察短期转折，但震荡中容易失真，需结合趋势与量价。' },
+      volume: { title: '量能（成交量配合）', description: '放量常用于确认突破或反弹的有效性；缩量上冲 / 下跌需警惕动能不足。' },
+      boll: { title: '布林带（波动 / 偏离）', description: '突破上轨或跌破下轨常见于趋势阶段或极端波动，应结合量能与回踩 / 站稳确认。' },
+      pattern: { title: 'K线形态（局部结构）', description: '单根形态的提示意义有限，更需结合所处趋势、支撑压力位与量能。' },
+      support: { title: '支撑位（关键支撑区）', label: '支撑 {{value}}', description: '接近支撑时更容易止跌反弹；放量跌破后支撑可能转为压力。它更偏向一个区域，而非精确点位。' },
+      resistance: { title: '压力位（关键压力区）', label: '压力 {{value}}', description: '越接近压力位，上行难度越大；放量突破并站稳后，原压力位可能转为支撑。' },
+    },
+    metrics: { fiveDay: '5日 {{value}}%', twentyDay: '20日 {{value}}%', amplitude: '振幅 {{value}}%' },
+    rules: { title: '建议 / 评分规则说明', expand: '（点击展开）', recommendation: '建议规则（按是否持仓）', unheld: '未持仓：score ≥ 3 → 买入；score ≤ -2 → 回避；其他 → 观望', held: '已持仓：score ≥ 3 → 加仓；score ≥ 1 → 持有；score ≤ -3 → 卖出；score ≤ -1 → 减仓；其他 → 观望', scoring: '评分规则（各项累加，0 为中性）', trend: '趋势（均线）：多头排列 +2；空头排列 -2', macd: 'MACD：金叉 +2；死叉 -2；柱体为正 +1；柱体为负 -1', rsi: 'RSI：超卖 +1；偏强 +1；超买 -1；偏弱 -1', kdj: 'KDJ：金叉 +1；死叉 -1', boll: '布林：突破上轨 +1；跌破下轨 -1', volume: '量能：放量 +1；缩量 -1', levels: '支撑 / 压力：收盘价 ≤ 支撑×1.02 → +1；收盘价 ≥ 压力×0.98 → -1' },
+    askAI: '问 AI 分析这些指标',
+  },
+  stockInsight: {
+    description: '概览、K线、AI建议、新闻、历史分析都在同一弹窗查看',
+    markets: { CN: 'A股', HK: '港股', US: '美股' },
+    actions: { generating: '生成中', image: '图片', share: '分享', copy: '复制', processing: '处理中...', held: '持仓中', unfollow: '取消关注', follow: '快速关注', setting: '设置中...', setAlert: '一键设提醒', askAI: '问 AI', refresh: '刷新', holdingCannotUnfollow: '持仓中的股票无法取消关注', more: '更多', openDetails: '打开详情页 ↗' },
+    tabs: { overview: '概览', suggestions: '建议 ({{count}})', reports: '报告 ({{count}})', deep: '深度', deepCount: '深度 (1)', kline: 'K线', announcements: '公告 ({{count}})', news: '新闻 ({{count}})' },
+    autoRefresh: '自动刷新', seconds: '{{count}}秒',
+    metrics: { open: '今开', high: '最高', low: '最低', volume: '成交量', turnover: '成交额', amplitude: '振幅', turnoverRate: '换手率', pe: '市盈率', marketCap: '总市值' },
+    holding: { title: '持仓信息', quantity: '持仓数量', cost: '持仓成本(单价)', marketValue: '持仓市值', pnl: '总盈亏', empty: '未在持仓中' },
+    miniKline: { title: '迷你K线', noSummary: '暂无K线摘要', empty: '暂无迷你K线', open: '点击进入交互式K线' },
+    cards: { aiSuggestions: 'AI建议', updating: '更新中...', core: '核心判断', noDescription: '暂无说明', action: '动作：', rationale: '依据：', noRationale: '暂无补充依据', source: '来源：', recentSuggestions: '近期补充建议', generatingSuggestion: '正在自动生成 AI 建议...', generatingSuggestionWait: '正在自动生成 AI 建议（通常 5-15 秒）...', noSuggestion: '暂无 AI 建议', news: '新闻', noNews: '暂无相关新闻', aiReports: 'AI报告', noReport: '暂无报告', reportSummary: '报告摘要', noReportContent: '暂无报告内容' },
+    reports: { premarket: '盘前', afterMarket: '盘后', premarketAgent: '盘前分析', afterMarketAgent: '盘后日报', context: '查看分析上下文', promptStats: 'Prompt统计', newsDetails: '新闻注入明细', contextSnapshot: '上下文快照', promptOriginal: 'Prompt原文' },
+    suggestions: { showExpired: '显示过期建议', includeExpired: '包含过期', activeOnly: '仅有效', technicalFallback: '当前显示技术指标基础建议', empty: '暂无建议' },
+    ranges: { hours6: '近6小时', hours12: '近12小时', hours24: '近24小时', hours48: '近48小时', hours72: '近72小时', days7: '近7天', days14: '近14天', days30: '近30天', days90: '近90天', days180: '近180天' },
+    announcementsEmpty: '暂无公告',
+    messages: { loadFailed: '加载失败', canvasUnavailable: '无法创建画布', imageSaved: '分享图片已生成并下载', imageFailed: '图片生成失败，请稍后重试', copied: '洞察内容已复制', copyFailed: '复制失败，请优先使用“图片”分享', shareCopied: '当前环境不支持系统分享，已自动复制内容', shareFailed: '分享失败，已自动复制内容', shareAndCopyFailed: '分享与复制均失败，请使用“图片”分享', alertSet: '已设置提醒，AI 分析已提交', alertFailed: '设置提醒失败', holdingCannotUnfollow: '该股票存在持仓，请先删除持仓后再取消关注', unfollowed: '已取消关注', followed: '已添加关注', operationFailed: '操作失败', autoSuggestionFailed: '自动 AI 建议触发失败，可点击「一键设提醒」重试' },
+    share: { title: 'PanWatch 洞察', time: '时间', currentPrice: '现价', suggestion: '建议', signal: '信号', reason: '理由', risk: '风险', technical: '技术', levels: '关键位', source: '来源', trigger: '触发', invalidation: '失效', support: '支撑', resistance: '压力', disclaimer: '仅供参考，不构成投资建议' },
+    technical: { neutral: '技术面中性', fallbackReason: '基于K线技术指标自动生成的基础建议', indicators: '技术指标建议', score: '评分 {{value}}', marketRisk: '市场波动风险', none: '暂无技术指标' },
+    deep: { loading: '正在加载深度分析报告...', empty: '暂无深度分析报告', emptyHint: '可在持仓 / 自选页点击 🧠 深度分析按钮触发', title: 'TradingAgents 深度', confidence: '置信度 {{value}} / 10', cost: '成本：${{value}}', analysts: '4 位分析师报告', truncated: '... （已截断）', debate: '看多看空辩论', judge: '研究主管裁决：', disclaimer: '本分析由 AI 多 Agent 框架生成，仅供学习研究参考，不构成任何投资建议。', stages: { market: '技术分析师', social: '情绪分析师', news: '新闻分析师', fundamentals: '基本面分析师' }, historyLoading: '历史对比加载中...', historyTitle: '历史决策 vs 实际涨跌', historyHint: '仅基于满 20 个交易日的决策统计', hitRate: '总命中率', buy: '买入 / 加仓 ({{count}})', sell: '卖出 / 减仓 ({{count}})', avg20d: '平均 20 日收益', columns: { date: '日期', decision: '决策', price: '分析价', day1: '1日', day5: '5日', day20: '20日', hit: '命中' } },
+  },
+} as const

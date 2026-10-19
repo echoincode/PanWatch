@@ -1,5 +1,8 @@
 import { type StrategySignalItem } from '@panwatch/api'
 import ShareCardDialog from './ShareCardDialog'
+import { useTranslation } from 'react-i18next'
+import { useMarketColors } from '@/hooks/use-market-colors'
+import type { MarketColorPalette } from '@/lib/market-colors'
 
 interface SignalScoreShareCardProps {
   open: boolean
@@ -7,31 +10,35 @@ interface SignalScoreShareCardProps {
   item: StrategySignalItem
 }
 
-// A股配色:看多=红、看空/中性等
-const UP = '#e11d48'
+const STRONG_SCORE = '#4f46e5'
 const NEUTRAL = '#d97706'
 const SLATE = '#475569'
 
-const MARKET_LABEL: Record<string, string> = { CN: 'A股', HK: '港股', US: '美股' }
-const marketLabel = (m?: string) => (m ? MARKET_LABEL[m] || m : '')
 
 /**
- * action → 展示标签 + 配色(与机会页一致:buy/add 看多偏红,hold 中性琥珀,其余灰)。
+ * action → 展示标签 + 配色(与机会页一致:buy/add 看多,reduce/sell 看空,hold 中性琥珀)。
  * 非持仓的 hold → 观望、非持仓的 add → 建仓(与 Opportunities 的 displayActionLabel 对齐)。
  */
-function actionVisual(item: StrategySignalItem): { label: string; color: string } {
+function actionVisual(
+  item: StrategySignalItem,
+  tr: (key: string) => string,
+  palette: MarketColorPalette,
+): { label: string; color: string } {
   const key = (item.action || '').toLowerCase()
-  let label = item.action_label || item.action || '观望'
-  if (!item.is_holding_snapshot && key === 'hold') label = '观望'
-  if (!item.is_holding_snapshot && key === 'add') label = '建仓'
-  if (key === 'buy' || key === 'add') return { label, color: UP }
+  const actionKey = !item.is_holding_snapshot && key === 'hold' ? 'watch' : key
+  const actionLabel = ['buy', 'add', 'hold', 'watch', 'reduce', 'sell'].includes(actionKey)
+    ? tr(`actions.${actionKey}`)
+    : item.action_label || item.action || tr('actions.watch')
+  const label = !item.is_holding_snapshot && key === 'add' ? tr('actions.add') : actionLabel
+  if (key === 'buy' || key === 'add') return { label, color: palette.up.text }
+  if (key === 'reduce' || key === 'sell') return { label, color: palette.down.text }
   if (key === 'hold') return { label, color: NEUTRAL }
   return { label, color: SLATE }
 }
 
-/** AI 评分(1~10)分档配色:≥8 红(强)、6~8 琥珀、<6 灰。 */
+/** AI 评分(1~10)分档配色与涨跌语义解耦，避免颜色偏好改变评分含义。 */
 function scoreColor(score: number): string {
-  if (score >= 8) return UP
+  if (score >= 8) return STRONG_SCORE
   if (score >= 6) return NEUTRAL
   return SLATE
 }
@@ -89,7 +96,14 @@ function FactorList({
  * 个股 AI 评分卡。Hero=AI 评分 X/10 + 操作标签 + 标的;下方利好/风险因子来自 factor_explain。
  */
 export default function SignalScoreShareCard({ open, onClose, item }: SignalScoreShareCardProps) {
-  const av = actionVisual(item)
+  const { t } = useTranslation('configuration')
+  const { palette } = useMarketColors()
+  const shareT = t as unknown as (key: string, options?: Record<string, unknown>) => string
+  const tr = (key: string, options?: Record<string, unknown>) => shareT(`p5.share.signal.${key}`, options)
+  const marketKey = `p5.share.markets.${item.stock_market}`
+  const translatedMarket = shareT(marketKey)
+  const marketLabel = translatedMarket === marketKey ? item.stock_market : translatedMarket
+  const av = actionVisual(item, tr, palette)
   const aiScore = typeof item.ai_score === 'number' ? item.ai_score : null
   const heroColor = aiScore != null ? scoreColor(aiScore) : SLATE
   const name = item.stock_name || item.stock_symbol
@@ -98,12 +112,12 @@ export default function SignalScoreShareCard({ open, onClose, item }: SignalScor
   const summary = (item.signal || item.reason || '').replace(/\s+/g, ' ').trim()
 
   return (
-    <ShareCardDialog open={open} onClose={onClose} filename={`AI选股评分-${name}`}>
+    <ShareCardDialog open={open} onClose={onClose} filename={tr('filename', { name })}>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 }}>
-        <div style={{ fontSize: 22, fontWeight: 800, lineHeight: 1.2, color: '#0f172a' }}>AI 选股评分</div>
+        <div style={{ fontSize: 22, fontWeight: 800, lineHeight: 1.2, color: '#0f172a' }}>{tr('title')}</div>
         <div style={{ fontSize: 14, color: '#94a3b8', fontWeight: 500, flexShrink: 0 }}>
-          {marketLabel(item.stock_market)}
+          {marketLabel}
         </div>
       </div>
 
@@ -137,7 +151,7 @@ export default function SignalScoreShareCard({ open, onClose, item }: SignalScor
             </div>
           </div>
           <div style={{ marginLeft: 'auto', textAlign: 'right', flexShrink: 0 }}>
-            <div style={{ fontSize: 12, opacity: 0.92, fontWeight: 600, letterSpacing: 1 }}>AI 评分</div>
+            <div style={{ fontSize: 12, opacity: 0.92, fontWeight: 600, letterSpacing: 1 }}>{tr('score')}</div>
             <div style={{ fontSize: 44, fontWeight: 900, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>
               {aiScore != null ? aiScore : '--'}
               <span style={{ fontSize: 20, opacity: 0.85 }}> / 10</span>
@@ -179,18 +193,25 @@ export default function SignalScoreShareCard({ open, onClose, item }: SignalScor
         </div>
       )}
 
-      {/* 因子拆解:利好(绿) / 风险(红) */}
+      {/* 因子拆解:正向 / 负向，遵循当前涨跌配色偏好。 */}
       {(positive.length > 0 || negative.length > 0) && (
         <div style={{ marginTop: 18, display: 'flex', gap: 16, alignItems: 'flex-start' }}>
           <FactorList
-            title="利好因子"
-            color="#059669"
-            bg="#ecfdf5"
-            border="#a7f3d0"
+            title={tr('positiveFactors')}
+            color={palette.up.text}
+            bg={palette.up.soft}
+            border={palette.up.border}
             items={positive}
             sign="+"
           />
-          <FactorList title="风险因子" color="#e11d48" bg="#fff1f2" border="#fecdd3" items={negative} sign="-" />
+          <FactorList
+            title={tr('riskFactors')}
+            color={palette.down.text}
+            bg={palette.down.soft}
+            border={palette.down.border}
+            items={negative}
+            sign="-"
+          />
         </div>
       )}
     </ShareCardDialog>
